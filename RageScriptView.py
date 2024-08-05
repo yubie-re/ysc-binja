@@ -7,10 +7,9 @@ from binaryninja.binaryview import BinaryView, SectionSemantics
 from binaryninja import Platform, Architecture, Symbol, SymbolType, StructureBuilder, Type
 from binaryninja.enums import SegmentFlag
 
-@dataclass
 class RageScriptHeader:
-    table : int
-    opcode_size : int
+    instruction_table : int
+    instruction_size : int
     arg_struct_size : int
     static_size : int
     global_size : int
@@ -24,33 +23,30 @@ class RageScriptHeader:
     string_heaps: int
     string_heaps_size : int
 
+    header_size : int
 
-def load_script_header(view : BinaryView):
-    f = BytesIO(view.read(0, 1000))
-    f.seek(0)
-    f.read(16)
-    table = int.from_bytes(f.read(8), "little") & 0xFFFFFF
-    print("{:x}".format(table))
-    f.read(4)
-    opcode_size = int.from_bytes(f.read(4), "little")
-    print("{:x}".format(opcode_size))
-    arg_struct_size = int.from_bytes(f.read(4), "little")
-    static_size = int.from_bytes(f.read(4), "little")
-    global_size = int.from_bytes(f.read(4), "little")
-    native_size = int.from_bytes(f.read(4), "little")
-    statics = int.from_bytes(f.read(8), "little") & 0xFFFFFF
-    scr_globals = int.from_bytes(f.read(8), "little") & 0xFFFFFF
-    natives = int.from_bytes(f.read(8), "little") & 0xFFFFFF
-    print(natives)
-    f.read(16)
-    hash_code = int.from_bytes(f.read(4), "little")
-    ref_count = int.from_bytes(f.read(4), "little")
-    script_name = int.from_bytes(f.read(8), "little") & 0xFFFFFF
-    string_heaps = int.from_bytes(f.read(8), "little") & 0xFFFFFF
-    string_heaps_size = int.from_bytes(f.read(4), "little")
-    f.read(12)
-    return RageScriptHeader(table, opcode_size, arg_struct_size, static_size, global_size, native_size, statics, scr_globals, natives, hash_code, ref_count, script_name, string_heaps, string_heaps_size), f.tell()
-
+    def __init__(self, view : BinaryView) -> None:
+        f = BytesIO(view.read(0, 1000))
+        f.seek(0)
+        f.read(16)
+        self.instruction_table = int.from_bytes(f.read(8), "little") & 0xFFFFFF
+        f.read(4)
+        self.instruction_size = int.from_bytes(f.read(4), "little")
+        self.arg_struct_size = int.from_bytes(f.read(4), "little")
+        self.static_size = int.from_bytes(f.read(4), "little")
+        self.global_size = int.from_bytes(f.read(4), "little")
+        self.native_size = int.from_bytes(f.read(4), "little")
+        self.statics = int.from_bytes(f.read(8), "little") & 0xFFFFFF
+        self.scr_globals = int.from_bytes(f.read(8), "little") & 0xFFFFFF
+        self.natives = int.from_bytes(f.read(8), "little") & 0xFFFFFF
+        f.read(16)
+        self.hash_code = int.from_bytes(f.read(4), "little")
+        self.ref_count = int.from_bytes(f.read(4), "little")
+        self.script_name = int.from_bytes(f.read(8), "little") & 0xFFFFFF
+        self.string_heaps = int.from_bytes(f.read(8), "little") & 0xFFFFFF
+        self.string_heaps_size = int.from_bytes(f.read(4), "little")
+        f.read(12)
+        self.header_size = f.tell()
 
 def rotate_left(value, count):
     count &= 63
@@ -64,12 +60,7 @@ class RageView(BinaryView):
 
     def __init__(self, data):
         BinaryView.__init__(self, parent_view = data, file_metadata = data.file)
-        self.arch = Architecture['YSC']
-        self.platform = Architecture['YSC'].standalone_platform
-        #self.platform = Platform['']
         self.data = data
-        self.data.arch = Architecture['YSC']
-        self.data.platform = Architecture['YSC'].standalone_platform
 
     def get_page_size(self, page_index, page_count, total_size):
         if page_index < 0 or page_index >= page_count:
@@ -78,116 +69,121 @@ class RageView(BinaryView):
             return total_size % self.PAGE_SIZE or self.PAGE_SIZE
         return self.PAGE_SIZE
 
+    """
+    Checks if data is valid YSC format. Checks if first instruction is an ENTER, otherwise it's invalid.
+
+    :return: is valid
+    :rtype: bool
+    """
     @classmethod
-    def is_valid_for_data(self, data : BinaryView):
-        header, size = load_script_header(data)
-        sanity_checks = header.global_size == 0
-        return sanity_checks and 'ysc' in data.file.filename
+    def is_valid_for_data(self, data : BinaryView) -> bool:
+        self.header = RageScriptHeader(data)
+        start_insn_address = int.from_bytes(data.read(self.header.instruction_table, 8), 'little') & 0xFFFFFF
+        start_insn = data.read(start_insn_address, 1)
+        if start_insn != b'\x2D': # ENTER
+            return False
+        return True
 
     def perform_get_address_size(self):
         return 4
-    
-    def get_page_table_array(self, table_offset, total_size) -> list[tuple[int, bytes]]:
+
+    """
+    Given a table, get all the pages and associated virtual address for each
+    """ 
+    def get_page_table_array(self, table_offset, total_size) -> list[tuple[int, int, int]]:
         array = []
         offset = 0
         page_count = (total_size + self.PAGE_SIZE - 1) // self.PAGE_SIZE
         for i in range(page_count):
             file_page_address = int.from_bytes(self.data.read(table_offset + i * 8, 8), 'little') & 0xFFFFFF
             page_size = self.get_page_size(i, page_count, total_size)
-            page_data = self.data.read(file_page_address, page_size)
-            array.append((offset, page_data))
+            array.append((file_page_address, offset, page_size))
             offset += page_size
         return array
     
-    def write_page_data(self, segment_start, arr):
-        for page_info in arr:
-            self.data.write(segment_start + page_info[0], page_info[1])
+    #def write_pages(self, arr : list[tuple[int, int]], start_virtual_offset : int):
+    #    for file_address, virtual_address, page_size in arr:
+    #        print(file_address, virtual_address, page_size)
+    #        print(self.write(virtual_address + start_virtual_offset, self.data.read(file_address, page_size)))
+    
+    def write_pages(self, arr : list[tuple[int, int]], start_virtual_offset : int, flags : SegmentFlag, name : str, semantics=SectionSemantics.DefaultSectionSemantics):
+        size  = 0
+        for file_address, virtual_address, page_size in arr:
+            size += page_size
+            self.add_auto_segment(virtual_address + start_virtual_offset, page_size, file_address, page_size, flags)
+        self.add_auto_section(name, start_virtual_offset, size, semantics)
 
     def define_custom_header_structure(self, bv : BinaryView):
+        b1 = StructureBuilder.create()
+        b1.packed = True
+        
+        b1.append(Type.pointer_of_width(3, Type.int(8)))
+        b1.append(Type.array(Type.int(1), 5), "ptr_pad")
+        bv.define_user_type("RagePtr", b1)
+
         sb = StructureBuilder.create()
         sb.packed = True
         sb.append(Type.int(8), "page_base")
-        sb.append(Type.int(8), "map_ptr")
-        sb.append(Type.int(8), "opcode_table")
+        sb.append(bv.types["RagePtr"], "map_ptr")
+        sb.append(bv.types["RagePtr"], "instruction_table")
         sb.append(Type.int(4), "globals_signature")
-        sb.append(Type.int(4), "opcode_size")
+        sb.append(Type.int(4), "instruction_size")
         sb.append(Type.int(4), "parameter_count")
         sb.append(Type.int(4), "static_size")
         sb.append(Type.int(4), "global_size")
         sb.append(Type.int(4), "native_size")
-        sb.append(Type.int(8), "statics_ptr")
-        sb.append(Type.int(8), "globals_ptr")
-        sb.append(Type.int(8), "natives_ptr")
+        sb.append(bv.types["RagePtr"], "statics_ptr")
+        sb.append(bv.types["RagePtr"], "globals_ptr")
+        sb.append(bv.types["RagePtr"], "natives_ptr")
         sb.append(Type.int(8), "unk_1")
         sb.append(Type.int(8), "unk_2")
         sb.append(Type.int(4), "hash_code")
         sb.append(Type.int(4), "ref_count")
-        sb.append(Type.int(8), "script_name")
-        sb.append(Type.int(8), "string_heaps")
+        sb.append(bv.types["RagePtr"], "script_name")
+        sb.append(bv.types["RagePtr"], "string_heaps")
         sb.append(Type.int(4), "string_heaps_size")
         sb.append(Type.int(8), "unk_3")
         sb.append(Type.int(4), "unk_4")
 
         bv.define_user_type("RageScriptHeader", sb)
 
-    def init(self):
-        header, size = load_script_header(self.data)
+    def init_raw(self):
         self.define_custom_header_structure(self.data)
-        
-        #self.data.add_auto_segment(0, size, 0, size, SegmentFlag.SegmentReadable | SegmentFlag.SegmentContainsData)
-        #self.data.add_auto_section("HDR", 0, header.opcode_size, SectionSemantics.ReadOnlyCodeSectionSemantics)
-
-        opcode_offset = 0
-        self.data.add_auto_segment(opcode_offset, header.opcode_size, opcode_offset, header.opcode_size, SegmentFlag.SegmentReadable | SegmentFlag.SegmentExecutable | SegmentFlag.SegmentContainsCode)
-        self.data.add_auto_section("CODE", opcode_offset, header.opcode_size, SectionSemantics.ReadOnlyCodeSectionSemantics)
-
-        native_segment_offset = opcode_offset + header.opcode_size
-        self.data.add_auto_segment(native_segment_offset, header.native_size + header.string_heaps_size + header.static_size + header.global_size, 0, header.native_size, SegmentFlag.SegmentReadable | SegmentFlag.SegmentContainsData)
-        self.data.add_auto_section("NATIVES", native_segment_offset, header.native_size, SectionSemantics.ReadOnlyDataSectionSemantics)
-
-        string_segment_offset = native_segment_offset + header.native_size
-        self.data.add_auto_section("STRINGS", string_segment_offset, header.string_heaps_size, SectionSemantics.ReadOnlyDataSectionSemantics)
-
-        static_segment_offset = string_segment_offset + header.string_heaps_size
-        self.data.add_auto_section("STATICS", static_segment_offset, header.static_size, SectionSemantics.ReadOnlyDataSectionSemantics)
-
-        global_segment_offset = static_segment_offset + header.static_size
-        if(header.scr_globals != 0 and header.global_size != 0):
-            self.data.add_auto_section("GLOBALS", global_segment_offset, header.global_size, SectionSemantics.ReadOnlyDataSectionSemantics)
-
-        self.data.add_auto_section("GLOBAL_MEMORY", 0x40000000, 0x100000, SectionSemantics.ReadOnlyDataSectionSemantics)
-        
-
-        
-        print("Caching pages")
-        global_pages = []
-        opcode_pages = self.get_page_table_array(header.table, header.opcode_size)
-        string_pages = self.get_page_table_array(header.string_heaps, header.string_heaps_size)
-        static_pages = self.get_page_table_array(header.statics, header.static_size)
-        if(header.scr_globals != 0 and header.global_size != 0):
-            global_pages = self.get_page_table_array(header.scr_globals, header.global_size)
-
-        natives = []
-        for i in range(0, header.native_size // 8):
-            natives.append(rotate_left(ctypes.c_uint64(int.from_bytes(self.data.read(header.natives + i * 8, 8), 'little')).value, i + native_segment_offset))
-
-        self.write_page_data(opcode_offset, opcode_pages)
-        self.write_page_data(string_segment_offset, string_pages)
-        self.write_page_data(static_segment_offset, static_pages)
-        self.write_page_data(global_segment_offset, global_pages)
-
-        self.data.remove(global_segment_offset + header.global_size, self.data.length - global_segment_offset - header.global_size)
-
-        #self.data.define_data_var(0, self.data.types["RageScriptHeader"])
-
-        for i in range(0, len(natives)):
-            native = natives[i]
-            self.data.write(native_segment_offset + (i * 8), native.to_bytes(8, 'little'))
-            self.data.define_data_var(native_segment_offset + (i * 8), "uint64_t")
-            self.data.define_auto_symbol(Symbol(SymbolType.DataSymbol, native_segment_offset + (i * 8), "native_{:X}".format(native)))
+        self.data.define_data_var(0, self.data.types["RageScriptHeader"])
 
 
-        self.data.add_entry_point(opcode_offset, Architecture['YSC'].standalone_platform)
+    def init(self):
+        self.arch = Architecture['YSC']
+        self.platform = Architecture['YSC'].standalone_platform
+        #header, size = load_script_header(self.data)
+        self.init_raw()
+        instruction_offset = 0
+        string_offset = instruction_offset + self.header.instruction_size
+        static_offset = string_offset + self.header.string_heaps_size
+        native_offset = static_offset + self.header.static_size
+        mem_end = native_offset + self.header.native_size
+        instruction_pages = self.get_page_table_array(self.header.instruction_table, self.header.instruction_size)
+        string_pages = self.get_page_table_array(self.header.string_heaps, self.header.string_heaps_size)
+        static_pages = self.get_page_table_array(self.header.statics, self.header.static_size) 
+
+        self.add_auto_segment(0x50000000, 0x10000000, 0, 0,  SegmentFlag.SegmentReadable | SegmentFlag.SegmentWritable | SegmentFlag.SegmentContainsData)
+        self.add_auto_section('STACK_MEM', 0x50000000, 0x10000000, SectionSemantics.ReadWriteDataSectionSemantics)
+
+        self.add_auto_segment(0x40000000, 0x10000000, 0, 0,  SegmentFlag.SegmentReadable | SegmentFlag.SegmentWritable | SegmentFlag.SegmentContainsData)
+        self.add_auto_section('GLOBAL_MEM', 0x40000000, 0x10000000, SectionSemantics.ReadWriteDataSectionSemantics)
+
+        self.write_pages(instruction_pages, instruction_offset, SegmentFlag.SegmentContainsCode | SegmentFlag.SegmentExecutable | SegmentFlag.SegmentReadable, 'CODE', SectionSemantics.ReadOnlyCodeSectionSemantics)
+        self.write_pages(string_pages, string_offset, SegmentFlag.SegmentContainsData | SegmentFlag.SegmentReadable, 'STRING', SectionSemantics.ReadOnlyDataSectionSemantics)
+        self.write_pages(static_pages, static_offset, SegmentFlag.SegmentContainsData | SegmentFlag.SegmentReadable, 'STATIC', SectionSemantics.ReadOnlyDataSectionSemantics)
+
+        self.add_auto_segment(native_offset, self.header.native_size, self.header.natives, self.header.native_size, SegmentFlag.SegmentReadable | SegmentFlag.SegmentContainsData)
+        self.add_auto_section('NATIVES', native_offset, self.header.native_size)
+        for i in range(0, self.header.native_size // 8):
+            native = rotate_left(ctypes.c_uint64(int.from_bytes(self.data.read(self.header.natives + i * 8, 8), 'little')).value, i + self.header.natives)
+            self.write(native_offset + (i * 8), native.to_bytes(8, 'little'))
+            self.define_data_var(native_offset + (i * 8), "uint64_t")
+            self.define_auto_symbol(Symbol(SymbolType.DataSymbol, native_offset + (i * 8), "native_{:X}".format(native)))
+        self.add_entry_point(0)
         return True
     
     def perform_is_executable(self):
@@ -196,4 +192,3 @@ class RageView(BinaryView):
     def perform_get_entry_point(self):
         return 0
 
-RageView.register()

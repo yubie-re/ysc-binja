@@ -53,5 +53,3 @@ class YSC(Architecture):
 	def get_instruction_low_level_il(self, data, addr, il):
 		return get_low_level_rage_il(self, data, addr, il)
 
-YSC.register()
-Architecture['YSC'].register_calling_convention(RageCallConvention(Architecture['YSC'], 'ysc'))

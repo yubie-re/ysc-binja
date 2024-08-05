@@ -256,10 +256,12 @@ def get_low_level_rage_il(arch: Architecture, data: bytes, address: int, il: Low
     elif insn_type == OP_STRING:
         size = 1
         str_seg_offset = 0
-        for section_name in il.view.sections:
-            if section_name == 'STRINGS':
-                str_seg_offset = il.view.sections[section_name].start 
-        il.append(il.push(4, il.add(4, il.const(4, str_seg_offset), il.pop(4))))
+        if il.view:
+            for section_name in il.view.sections:
+                if section_name == 'STRINGS':
+                    str_seg_offset = il.view.sections[section_name].start 
+                    il.append(il.push(4, il.add(4, il.const(4, str_seg_offset), il.pop(4))))
+                    break
     elif insn_type == OP_CALL:
         size = 4
         address = get_next_u24(stream)
@@ -354,9 +356,10 @@ def get_low_level_rage_il(arch: Architecture, data: bytes, address: int, il: Low
     elif insn_type == OP_SWITCH:
         size = 1
         switch_count = get_next_byte(stream)
-        switch_table = il.view.read(address + 2, 6 * switch_count)
-        il.append(il.set_reg(4, 'SWITCH', il.pop(4)))
-        recursive_switch_il(il, switch_table, address, 0, LowLevelILLabel())
+        if il.view:
+            switch_table = il.view.read(address + 2, 6 * switch_count)
+            il.append(il.set_reg(4, 'SWITCH', il.pop(4)))
+            recursive_switch_il(il, switch_table, address, 0, LowLevelILLabel())
     elif insn_type == OP_IS_BIT_SET:
         size = 1
         il.append(il.push(4, il.compare_not_equal(4, il.const(4, 0), il.and_expr(
