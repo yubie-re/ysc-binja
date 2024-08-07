@@ -113,11 +113,11 @@ def get_low_level_rage_il(arch: Architecture, data: bytes, address: int, il: Low
     elif insn_type == OP_STATIC_U8_STORE:
         stack_needle = get_next_byte(stream) * 8
         size = 2
-        il.append(il.store(4, il.const(4, stack_needle + STACK_VADDR), il.pop(4)))
+        il.append(il.store(4, il.add(4, il.const(4, stack_needle), il.const(4, il.const(4, STACK_VADDR))), il.pop(4)))
     elif insn_type == OP_STATIC_U8_LOAD:
         stack_needle = get_next_byte(stream) * 8
         size = 2
-        il.append(il.push(4, il.load(4, il.const(4, stack_needle + STACK_VADDR))))
+        il.append(il.push(4, il.load(4, il.add(4, il.const(4, stack_needle), il.const(4, il.const(4, STACK_VADDR))))))
     elif insn_type == OP_STATIC_U8:
         stack_needle = get_next_byte(stream) * 8
         size = 2
@@ -125,11 +125,11 @@ def get_low_level_rage_il(arch: Architecture, data: bytes, address: int, il: Low
     elif insn_type == OP_STATIC_U16_STORE:
         stack_needle = get_next_word(stream) * 8
         size = 3
-        il.append(il.store(4, il.const(4, stack_needle + STACK_VADDR), il.pop(4)))
+        il.append(il.store(4, il.add(4, il.const(4, stack_needle), il.const(4, il.const(4, STACK_VADDR))), il.pop(4)))
     elif insn_type == OP_STATIC_U16_LOAD:
         stack_needle = get_next_word(stream) * 8
         size = 3
-        il.append(il.push(4, il.load(4, il.const(4, stack_needle + STACK_VADDR))))
+        il.append(il.push(4, il.load(4, il.add(4, il.const(4, stack_needle), il.const(4, il.const(4, STACK_VADDR))))))
     elif insn_type == OP_STATIC_U16:
         stack_needle = get_next_word(stream) * 8
         size = 3
@@ -137,11 +137,11 @@ def get_low_level_rage_il(arch: Architecture, data: bytes, address: int, il: Low
     elif insn_type == OP_STATIC_U24_STORE:
         stack_needle = get_next_u24(stream) * 8
         size = 4
-        il.append(il.store(4, il.const(4, stack_needle + STACK_VADDR), il.pop(4)))
+        il.append(il.store(4, il.add(4, il.const(4, stack_needle), il.const(4, il.const(4, STACK_VADDR))), il.pop(4)))
     elif insn_type == OP_STATIC_U24_LOAD:
         stack_needle = get_next_u24(stream) * 8
         size = 4
-        il.append(il.push(4, il.load(4, il.const(4, stack_needle + STACK_VADDR))))
+        il.append(il.push(4, il.load(4, il.add(4, il.const(4, stack_needle), il.const(4, il.const(4, STACK_VADDR))))))
     elif insn_type == OP_STATIC_U24:
         stack_needle = get_next_u24(stream) * 8
         size = 4
