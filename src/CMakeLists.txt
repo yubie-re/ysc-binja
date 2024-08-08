@@ -19,8 +19,7 @@ add_compile_options(/bigobj)
 add_library(BinjaYSC SHARED ${SRC_MAIN})
 
 target_precompile_headers(BinjaYSC PRIVATE "${SRC_DIR}/inc.hpp")
-target_link_libraries(BinjaYSC binaryninjacore binaryninjaapi fmt )
-add_compile_definitions(BinjaYSC)
+target_link_libraries(BinjaYSC binaryninjacore binaryninjaapi fmt nlohmann_json::nlohmann_json)
 
 bn_install_plugin(BinjaYSC)
 

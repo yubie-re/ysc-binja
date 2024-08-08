@@ -22,6 +22,13 @@ void OpStaticU24Load::GetInstructionText(const uint8_t* data, uint64_t addr, siz
 bool OpStaticU24Load::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il)
 {
     const uint32_t operand = Uint24(data);
-    il.AddInstruction(il.Push(4, il.Load(4, il.Add(4, il.Const(4, operand), il.Const(4, STACK_VADDR)))));
+    if(!il.GetFunction())
+        return false;
+    if(!il.GetFunction()->GetView())
+        return false;
+    if(!il.GetFunction()->GetView()->GetSectionByName("STATICS"))
+        return false;
+
+    il.AddInstruction(il.Push(4, il.Load(4, il.Add(4, il.Const(4, 8 * operand), il.Const(4, il.GetFunction()->GetView()->GetSectionByName("STATICS")->GetStart())))));
     return true;
 }

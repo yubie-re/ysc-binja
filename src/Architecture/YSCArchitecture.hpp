@@ -19,6 +19,7 @@ enum Registers
     Reg_VX2,
     Reg_VY2,
     Reg_VZ2,
+    Reg_POPHOLDER,
     Reg_MAX
 };
 
@@ -33,7 +34,8 @@ const std::array<std::string_view, Reg_MAX> g_RegNames = {
     "VZ1",
     "VX2",
     "VY2",
-    "VZ2"
+    "VZ2",
+    "POPHOLDER"
 };
 
 class YSCArchitecture : public BinaryNinja::Architecture

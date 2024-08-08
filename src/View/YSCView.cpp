@@ -1,6 +1,11 @@
 #include "inc.hpp"
 #include "YSCView.hpp"
 #include "Instructions/OperationEnum.hpp"
+#include "Crossmap.hpp"
+#include "json/json.h"
+#include <fstream>
+
+using namespace nlohmann;
 
 #define PAGE_SIZE 0x4000
 
@@ -31,8 +36,8 @@ bool YSCView::Init()
         uint32_t instructionOffset = 0;
         uint32_t stringOffset = instructionOffset + header.m_codeSize;
         uint32_t staticOffset = stringOffset + header.m_stringHeapSize;
-        uint32_t globalOffset = staticOffset + header.m_staticCount;
-        uint32_t nativeOffset = globalOffset + header.m_globalCount;
+        uint32_t globalOffset = staticOffset + header.m_staticCount * 8;
+        uint32_t nativeOffset = globalOffset + header.m_globalCount * 8;
         uint32_t memEnd = nativeOffset + header.m_nativesCount;
 
         WritePages(header.m_codeTable, header.m_codeSize, instructionOffset, 
@@ -41,11 +46,24 @@ bool YSCView::Init()
         WritePages(header.m_stringHeapTable, header.m_stringHeapSize, stringOffset, 
             BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable,
             "STRINGS", BNSectionSemantics::ReadOnlyDataSectionSemantics);
-
+        AddAutoSegment(staticOffset, header.m_staticCount * sizeof(uint64_t), 
+            *header.m_staticsTable, header.m_staticCount * sizeof(uint64_t), BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable);
+        AddAutoSection("STATICS", staticOffset, header.m_staticCount * sizeof(uint64_t), 
+            BNSectionSemantics::ReadOnlyDataSectionSemantics);
         AddAutoSegment(nativeOffset, header.m_nativesCount * sizeof(uint64_t), 
-            *header.m_nativesTable, header.m_nativesCount * 8, BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable);
+            *header.m_nativesTable, header.m_nativesCount * sizeof(uint64_t), BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable);
         AddAutoSection("NATIVES", nativeOffset, header.m_nativesCount * sizeof(uint64_t), 
             BNSectionSemantics::ReadOnlyDataSectionSemantics);
+
+        AddAutoSegment(0x60000000, 0x1000000, 
+            0, 0, BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable);
+        AddAutoSection("GLOBALS", 0x60000000, 0x1000000, 
+            BNSectionSemantics::ReadOnlyDataSectionSemantics);
+
+        std::filesystem::path p = std::filesystem::path(BinaryNinja::GetUserPluginDirectory()) / "natives.json";
+        json j;
+        std::ifstream ifs(p);
+        ifs >> j;
 
         for(int i = 0; i < header.m_nativesCount; i++)
         {
@@ -53,10 +71,37 @@ bool YSCView::Init()
             uint32_t nativeAddress = nativeOffset + i * sizeof(uint64_t);
 
             Read(&native, nativeAddress, sizeof(uint64_t));
-            native = RotLeft(native, i + *header.m_nativesTable);
+            native = RotLeft(native, i + header.m_codeSize);
             Write(nativeAddress, &native, 8);
-            DefineDataVariable(nativeAddress, BinaryNinja::Type::IntegerType(8, false));
-            DefineAutoSymbol(BinaryNinja::Ref<BinaryNinja::Symbol>(new BinaryNinja::Symbol(BNSymbolType::DataSymbol, fmt::format("native_{:X}", native), nativeAddress)));
+            if(!g_reverseCrossmap.contains(native))
+                continue;
+            uint64_t nativeDay1 = g_reverseCrossmap.at(native);
+            auto jsonHash = fmt::format("0x{:X}", nativeDay1);
+            for (auto& namespce : j.items())
+            {
+                auto find = namespce.value().find(jsonHash);
+                if(find != namespce.value().end())
+                {
+                    auto nativeStruct = *find;
+                    using namespace BinaryNinja;
+                    Ref<Type> returnValue = nativeStruct["return_type"] == "void" ? Type::VoidType() : Type::IntegerType(4, true);
+                    Ref<CallingConvention> callConvention = GetDefaultPlatform()->GetDefaultCallingConvention();
+                    std::vector<FunctionParameter> params;
+                    for(auto& x : nativeStruct["params"])
+                    {
+                        params.push_back(FunctionParameter(x["name"].get<std::string>(), Type::IntegerType(4, true)));
+                    }
+                    DefineDataVariable(nativeAddress, Type::PointerType(8, Type::FunctionType(returnValue, callConvention, params, false, 0)));
+                    DefineAutoSymbol(new Symbol(BNSymbolType::ExternalSymbol, fmt::format("native_{}_{}", namespce.key(), nativeStruct["name"].get<std::string>()), nativeAddress));
+                    break;
+                }
+            }
+        }
+
+        for(int i = 0; i < header.m_staticCount; i++)
+        {
+            DefineDataVariable(staticOffset + i * 8, BinaryNinja::Type::IntegerType(8, true));
+            DefineAutoSymbol(new BinaryNinja::Symbol(BNSymbolType::DataSymbol, fmt::format("Local_{}", i), staticOffset + i * 8));
         }
     }
     catch(std::exception& ex)
@@ -72,9 +117,9 @@ void YSCView::WritePages(YSCPointer tablePtr, uint32_t totalSize, uint32_t virtu
 {
     uint32_t pageCount = (totalSize + PAGE_SIZE - 1) / PAGE_SIZE;
     std::vector<YSCPointer> tableEntries(pageCount);
-    
+
     GetParentView()->Read(tableEntries.data(), *tablePtr, pageCount * sizeof(YSCPointer));
-    
+
     for(uint32_t i = 0, offset = virtualAddress; i < pageCount; i++)
     {
         uint32_t pageSize = GetPageSize(i, pageCount, totalSize);

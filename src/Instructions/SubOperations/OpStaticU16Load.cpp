@@ -21,6 +21,13 @@ void OpStaticU16Load::GetInstructionText(const uint8_t* data, uint64_t addr, siz
 bool OpStaticU16Load::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il)
 {
     const uint16_t operand = *reinterpret_cast<const uint16_t*>(data);
-    il.AddInstruction(il.Push(4, il.Load(4, il.Add(4, il.Const(4, operand), il.Const(4, STACK_VADDR)))));
+    if(!il.GetFunction())
+        return false;
+    if(!il.GetFunction()->GetView())
+        return false;
+    if(!il.GetFunction()->GetView()->GetSectionByName("STATICS"))
+        return false;
+
+    il.AddInstruction(il.Push(4, il.Load(4, il.Const(4, 8 * static_cast<int>(operand) + il.GetFunction()->GetView()->GetSectionByName("STATICS")->GetStart()))));
     return true;
 }

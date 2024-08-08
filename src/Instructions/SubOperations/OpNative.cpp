@@ -30,7 +30,17 @@ bool OpNative::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size
     const uint8_t retSize = data[0];
     const uint8_t paramCount = (retSize >> 2) & 63;
     const int nativeOffset = static_cast<int>((data[1] << 8) | data[2]) * 8;
-    il.AddInstruction(il.SystemCall());
-    il.AddInstruction(il.SetRegister(4, Reg_SP, il.Sub(4, il.Register(4, Reg_SP),il.Const(4, (retSize + paramCount) * 4))));
+    if(il.GetFunction() && il.GetFunction()->GetView())
+    {
+        if(auto section = il.GetFunction()->GetView()->GetSectionByName("NATIVES"))
+        {
+            il.AddInstruction(il.Call(il.ExternPointer(8, il.GetFunction()->GetView()->GetSectionByName("NATIVES")->GetStart() + nativeOffset, 0)));
+            //il.AddInstruction(il.SetRegister(4, Reg_SP, il.Sub(4, il.Register(4, Reg_SP),il.Const(4, (retSize + paramCount) * 4))));
+        }
+        else
+            return false;
+    }
+    else
+        return false;
     return true;
 }

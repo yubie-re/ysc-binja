@@ -20,6 +20,13 @@ void OpStaticU8Store::GetInstructionText(const uint8_t* data, uint64_t addr, siz
 
 bool OpStaticU8Store::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il)
 {
-    il.AddInstruction(il.Store(4, il.Add(4, il.Const(4, data[0]), il.Const(4, STACK_VADDR)), il.Pop(4)));
+    if(!il.GetFunction())
+        return false;
+    if(!il.GetFunction()->GetView())
+        return false;
+    if(!il.GetFunction()->GetView()->GetSectionByName("STATICS"))
+        return false;
+
+    il.AddInstruction(il.Store(4, il.Const(4, 8 * static_cast<int>(data[0]) + il.GetFunction()->GetView()->GetSectionByName("STATICS")->GetStart()), il.Pop(4)));
     return true;
 }

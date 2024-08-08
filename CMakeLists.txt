@@ -3,5 +3,6 @@ project(BinjaYSC CXX C)
 
 message("\nFetching modules")
 include(cmake/binja.cmake)
+include(cmake/json.cmake)
 
 add_subdirectory(src)
