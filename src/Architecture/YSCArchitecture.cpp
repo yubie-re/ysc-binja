@@ -59,3 +59,60 @@ std::vector<uint32_t> YSCArchitecture::GetAllRegisters() {
     result.assign(view.begin(), view.end());
     return result;
 }
+
+BNIntrinsicClass YSCArchitecture::GetIntrinsicClass (uint32_t intrinsic)
+{
+    return BNIntrinsicClass::GeneralIntrinsicClass;
+}
+
+std::string YSCArchitecture::GetIntrinsicName(uint32_t intrinsic)
+{
+    if(intrinsic > Intrin_MAX)
+    {
+        return "UNKINTRIN";
+    }
+
+    return std::string(g_intrinNames[intrinsic]);
+}
+
+std::vector<uint32_t> YSCArchitecture::GetAllIntrinsics()
+{
+    std::vector<uint32_t> result;
+    auto view = std::views::iota(0, Intrin_MAX - 1);
+    result.assign(view.begin(), view.end());
+    return result;
+}
+
+std::vector<BinaryNinja::NameAndType> YSCArchitecture::GetIntrinsicInputs(uint32_t intrinsic)
+{
+    using namespace BinaryNinja;
+    std::vector<NameAndType> result;
+    switch(intrinsic)
+    {
+        case Intrin_STOREN:
+        {
+            result.push_back(NameAndType("memoryStart", Type::IntegerType(4, true)));
+            result.push_back(NameAndType("itemCount", Type::IntegerType(4, true)));
+            break;
+        }
+        default:
+            break;
+    }
+    return result;
+}
+
+std::vector<BinaryNinja::Confidence<BinaryNinja::Ref<BinaryNinja::Type>>> YSCArchitecture::GetIntrinsicOutputs(uint32_t intrinsic){
+    using namespace BinaryNinja;
+    std::vector<Confidence<Ref<Type>>> result;
+    switch(intrinsic)
+    {
+        case Intrin_STOREN:
+        {
+            result.push_back(Type::VoidType());
+            break;
+        }
+        default:
+            break;
+    }
+    return result;
+}

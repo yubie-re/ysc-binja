@@ -1,5 +1,6 @@
 #include "inc.hpp"
 #include "OpIoffsetS16Store.hpp"
+#include "Architecture/YSCArchitecture.hpp"
 
 size_t OpIoffsetS16Store::GetSize()
 {
@@ -21,6 +22,12 @@ void OpIoffsetS16Store::GetInstructionText(const uint8_t* data, uint64_t addr, s
 bool OpIoffsetS16Store::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il)
 {
     const int16_t operand = *reinterpret_cast<const int16_t*>(data);
-    il.AddInstruction(il.Store(4, il.Add(4, il.Pop(4), il.Const(4, operand)), il.Pop(4)));
+    il.AddInstruction(il.SetRegister(4, Reg_POPHOLDER, il.Pop(4)));
+    il.AddInstruction(
+        il.Store(4, 
+            il.Add(4, 
+                il.Register(4, Reg_POPHOLDER), 
+                il.Const(4, static_cast<int>(operand) * 8)), 
+        il.Pop(4)));
     return true;
 }

@@ -20,6 +20,7 @@ enum Registers
     Reg_VY2,
     Reg_VZ2,
     Reg_POPHOLDER,
+    Reg_I,
     Reg_MAX
 };
 
@@ -35,7 +36,18 @@ const std::array<std::string_view, Reg_MAX> g_RegNames = {
     "VX2",
     "VY2",
     "VZ2",
-    "POPHOLDER"
+    "POPHOLDER",
+    "I"
+};
+
+enum Intrin
+{
+    Intrin_STOREN,
+    Intrin_MAX
+};
+
+const std::array<std::string_view, Intrin_MAX> g_intrinNames = {
+    "STOREN"
 };
 
 class YSCArchitecture : public BinaryNinja::Architecture
@@ -66,6 +78,17 @@ public:
 	uint32_t GetStackPointerRegister() override;
 
 	std::vector<uint32_t> GetAllRegisters() override;
+
+    BNIntrinsicClass GetIntrinsicClass (uint32_t intrinsic) override;
+
+    std::string GetIntrinsicName(uint32_t intrinsic) override;
+
+    std::vector<uint32_t> GetAllIntrinsics() override;
+
+    std::vector<BinaryNinja::NameAndType>GetIntrinsicInputs(uint32_t intrinsic) override;
+
+    std::vector<BinaryNinja::Confidence<BinaryNinja::Ref<BinaryNinja::Type>>> GetIntrinsicOutputs(uint32_t  intrinsic) override;
+
 private:
     std::array<std::unique_ptr<OpBase>, OP_MAX> m_insns;
 };

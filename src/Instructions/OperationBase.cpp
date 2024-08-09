@@ -5,6 +5,7 @@
 void OpBase::GetInstructionText(const uint8_t* data, uint64_t addr, size_t& len, std::vector<BinaryNinja::InstructionTextToken>& result)
 {
     result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::InstructionToken, std::string(GetName())));
+    result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::OperandSeparatorToken, " "));
 }
 
 bool OpBase::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il)

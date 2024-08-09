@@ -40,11 +40,16 @@ void OpSwitch::ProcessSwitchCases(std::vector<SwitchCase> switchData, BinaryNinj
 {
     if (index >= switchCount) // Base case: if index reaches the switchCount, stop recursion
     {
-        il.AddInstruction(il.Jump(il.Const(4, address + index * 6 + 2)));
+        auto branchIlLabelPtr = il.GetLabelForAddress(BinaryNinja::Architecture::GetByName("YSC"), address + index * 6 + 2);
+        if(branchIlLabelPtr)
+            il.AddInstruction(il.Goto(*branchIlLabelPtr));
+        else
+            il.AddInstruction(il.Jump(il.Const(4, address + index * 6 + 2)));
         return;
     }
 
     SwitchCase switchCase = switchData[index];
+    auto branchIlLabelPtr = il.GetLabelForAddress(BinaryNinja::Architecture::GetByName("YSC"), address + static_cast<int>(switchCase.m_target) + (index + 1) * 6 + 2);
     BinaryNinja::LowLevelILLabel t;
     BinaryNinja::LowLevelILLabel f;
     il.AddInstruction(
@@ -55,11 +60,10 @@ void OpSwitch::ProcessSwitchCases(std::vector<SwitchCase> switchData, BinaryNinj
             t, f)
     );
     il.MarkLabel(t);
-    il.AddInstruction(
-        il.Jump(
-            il.Const(4, address + static_cast<int>(switchCase.m_target) + (index + 1) * 6 + 2)
-        )
-    );
+    if(branchIlLabelPtr)
+        il.AddInstruction(il.Goto(*branchIlLabelPtr));
+    else
+        il.AddInstruction(il.Jump(il.Const(4, address + static_cast<int>(switchCase.m_target) + (index + 1) * 6 + 2)));
     il.MarkLabel(f);
 
     // Recursive call to process the next switch case

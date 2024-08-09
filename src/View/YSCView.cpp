@@ -33,7 +33,7 @@ bool YSCView::Init()
         YSCHeader header {};
         GetParentView()->Read(&header, 0, sizeof(YSCHeader));
 
-        uint32_t instructionOffset = 0;
+        uint32_t instructionOffset = CODE_OFFSET;
         uint32_t stringOffset = instructionOffset + header.m_codeSize;
         uint32_t staticOffset = stringOffset + header.m_stringHeapSize;
         uint32_t globalOffset = staticOffset + header.m_staticCount * 8;
@@ -55,11 +55,11 @@ bool YSCView::Init()
         AddAutoSection("NATIVES", nativeOffset, header.m_nativesCount * sizeof(uint64_t), 
             BNSectionSemantics::ReadOnlyDataSectionSemantics);
         // globalBlocks[0x12][0x40000]
-        AddAutoSegment(0x60000000, 0x12 * 0x40000, 
+        AddAutoSegment(0x60000000, 0x13 * 0x40000, 
             0, 0, BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable);
-        AddAutoSection("GLOBALS", 0x60000000, 0x12 * 0x40000, 
+        AddAutoSection("GLOBALS", 0x60000000, 0x13 * 0x40000, 
             BNSectionSemantics::ReadOnlyDataSectionSemantics);
-
+        
         std::filesystem::path p = std::filesystem::path(BinaryNinja::GetUserPluginDirectory()) / "natives.json";
         json j;
         std::ifstream ifs(p);

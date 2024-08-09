@@ -25,7 +25,11 @@ bool OpIltJz::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_
     auto f = BinaryNinja::LowLevelILLabel();
     il.AddInstruction(il.If(il.CompareSignedLessThan(4, il.Pop(4), il.Pop(4)), t, f));
     il.MarkLabel(f);
-    il.AddInstruction(il.Jump(il.Const(4, operand)));
+    auto branchIlLabelPtr = il.GetLabelForAddress(BinaryNinja::Architecture::GetByName("YSC"), operand);
+    if(branchIlLabelPtr)
+        il.AddInstruction(il.Goto(*branchIlLabelPtr));
+    else
+        il.AddInstruction(il.Jump(il.Const(4, operand)));
     il.MarkLabel(t);
     return true;
 }

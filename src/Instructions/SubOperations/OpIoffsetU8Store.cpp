@@ -23,10 +23,11 @@ bool OpIoffsetU8Store::GetInstructionLowLevelIL(const uint8_t* data, uint64_t ad
 {
     const uint8_t operand = *reinterpret_cast<const uint8_t*>(data);
     il.AddInstruction(il.SetRegister(4, Reg_POPHOLDER, il.Pop(4)));
-    il.AddInstruction(il.Store(4, 
-        il.Add(4,
-            il.Register(4, Reg_POPHOLDER),
-            il.Const(4, operand * 8)), 
+    il.AddInstruction(
+        il.Store(4, 
+            il.Add(4, 
+                il.Register(4, Reg_POPHOLDER), 
+                il.Const(4, static_cast<int>(operand) * 8)), 
         il.Pop(4)));
     return true;
 }

@@ -14,14 +14,20 @@ std::string_view OpCall::GetName()
 
 void OpCall::GetInstructionText(const uint8_t* data, uint64_t addr, size_t& len, std::vector<BinaryNinja::InstructionTextToken>& result)
 {
-    const uint32_t operand = Uint24(data);
+    const uint32_t operand = Uint24(data) + CODE_OFFSET;
     OpBase::GetInstructionText(data, addr, len, result);
     result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::PossibleAddressToken, fmt::format("{:x}", operand), operand));
 }
 
 bool OpCall::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il)
 {
-    const uint32_t operand = Uint24(data);
+    if(!il.GetFunction())
+        return false;
+    if(!il.GetFunction()->GetView())
+        return false;
+    if(!il.GetFunction()->GetView()->GetSectionByName("CODE"))
+        return false;
+    const uint32_t operand = Uint24(data) + il.GetFunction()->GetView()->GetSectionByName("CODE")->GetStart();
     il.AddInstruction(il.Call(il.Const(4, operand)));
     return true;
 }
@@ -29,7 +35,7 @@ bool OpCall::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t
 bool OpCall::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::InstructionInfo& result)
 {
     OpBase::GetInstructionInfo(data, addr, maxLen, result);
-    const uint32_t operand = Uint24(data);
+    const uint32_t operand = Uint24(data) + CODE_OFFSET;
     result.AddBranch(BNBranchType::CallDestination, operand);
     return true;
 }

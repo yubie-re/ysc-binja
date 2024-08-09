@@ -10,7 +10,6 @@
 #include <iostream>
 #include <filesystem>
 
-#define GLOBAL_VADDR 0x60000000
-#define STACK_VADDR 0x50000000
+#define CODE_OFFSET 0
 
 #endif
