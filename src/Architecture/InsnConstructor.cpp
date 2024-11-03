@@ -117,6 +117,7 @@
 #include "Instructions/SubOperations/OpPushConstFloat.hpp"
 #include "Instructions/SubOperations/OpIsBitSet.hpp"
 #include "Instructions/OperationEnum.hpp"
+#include "CallingConvention/CallingConvention.hpp"
 
 YSCArchitecture::YSCArchitecture(const std::string& name) : BinaryNinja::Architecture(name), m_insns({
         std::make_unique<OpNop>(),

@@ -51,9 +51,9 @@ bool YSCView::Init()
         AddAutoSection("STATICS", staticOffset, header.m_staticCount * sizeof(uint64_t), 
             BNSectionSemantics::ReadOnlyDataSectionSemantics);
         AddAutoSegment(nativeOffset, header.m_nativesCount * sizeof(uint64_t), 
-            *header.m_nativesTable, header.m_nativesCount * sizeof(uint64_t), BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable);
+            *header.m_nativesTable, header.m_nativesCount * sizeof(uint64_t), BNSegmentFlag::SegmentContainsData);
         AddAutoSection("NATIVES", nativeOffset, header.m_nativesCount * sizeof(uint64_t), 
-            BNSectionSemantics::ReadOnlyDataSectionSemantics);
+            BNSectionSemantics::ExternalSectionSemantics);
         // globalBlocks[0x12][0x40000]
         AddAutoSegment(0x60000000, 0x13 * 0x40000, 
             0, 0, BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable);
@@ -85,13 +85,13 @@ bool YSCView::Init()
                     auto nativeStruct = *find;
                     using namespace BinaryNinja;
                     Ref<Type> returnValue = nativeStruct["return_type"] == "void" ? Type::VoidType() : Type::IntegerType(4, true);
-                    Ref<CallingConvention> callConvention = GetDefaultPlatform()->GetDefaultCallingConvention();
+                    Ref<CallingConvention> callConvention = GetDefaultArchitecture()->GetDefaultCallingConvention();
                     std::vector<FunctionParameter> params;
                     for(auto& x : nativeStruct["params"])
                     {
                         params.push_back(FunctionParameter(x["name"].get<std::string>(), Type::IntegerType(4, true)));
                     }
-                    DefineDataVariable(nativeAddress, Type::PointerType(8, Type::FunctionType(returnValue, callConvention, params, false, 0)));
+                    DefineDataVariable(nativeAddress, Type::FunctionType(returnValue, callConvention, params, false, 0));
                     DefineAutoSymbol(new Symbol(BNSymbolType::ExternalSymbol, fmt::format("native_{}_{}", namespce.key(), nativeStruct["name"].get<std::string>()), nativeAddress));
                     break;
                 }

@@ -30,6 +30,7 @@ bool OpEnter::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_
     const uint8_t paramCount = data[0];
     const uint16_t localCount = *reinterpret_cast<const uint16_t*>(&data[1]);
     const uint8_t nameCount = data[3];
+
     il.AddInstruction(il.Push(4, il.Register(4, Reg_FP)));
     il.AddInstruction(il.SetRegister(4, Reg_FP, il.Sub(4, il.Register(4, Reg_SP), il.Const(4, (paramCount + 1) * 4))));
     for(int i = 0; i < localCount; i++)

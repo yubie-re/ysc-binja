@@ -42,7 +42,7 @@ bool OpLeave::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_
     for(int i = 0; i < returnSize; i++)
         il.AddInstruction(il.Push(4, il.Load(4, il.Sub(4, il.Register(4, Reg_TMP), il.Const(4, 4 * i)))));
 
-    if(il.GetFunction().GetPtr() && !il.GetFunction()->GetStart())
+    if(il.GetFunction() && !il.GetFunction()->GetStart())
     {
         il.AddInstruction(il.NoReturn());
         return true;

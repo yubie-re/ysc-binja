@@ -101,7 +101,8 @@ std::vector<BinaryNinja::NameAndType> YSCArchitecture::GetIntrinsicInputs(uint32
     return result;
 }
 
-std::vector<BinaryNinja::Confidence<BinaryNinja::Ref<BinaryNinja::Type>>> YSCArchitecture::GetIntrinsicOutputs(uint32_t intrinsic){
+std::vector<BinaryNinja::Confidence<BinaryNinja::Ref<BinaryNinja::Type>>> YSCArchitecture::GetIntrinsicOutputs(uint32_t intrinsic)
+{
     using namespace BinaryNinja;
     std::vector<Confidence<Ref<Type>>> result;
     switch(intrinsic)
