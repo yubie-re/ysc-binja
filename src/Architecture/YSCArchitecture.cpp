@@ -44,7 +44,10 @@ bool YSCArchitecture::GetInstructionLowLevelIL(const uint8_t* data, uint64_t add
 BNRegisterInfo YSCArchitecture::GetRegisterInfo(uint32_t reg)
 {
     BNRegisterInfo info;
+    info.fullWidthRegister = reg;
     info.size = 4;
+    info.extend = NoExtend;
+    info.offset = 0;
     return info;
 }
 
@@ -54,10 +57,7 @@ uint32_t YSCArchitecture::GetStackPointerRegister()
 }
 
 std::vector<uint32_t> YSCArchitecture::GetAllRegisters() {
-    std::vector<uint32_t> result;
-    auto view = std::views::iota(0, Reg_MAX - 1);
-    result.assign(view.begin(), view.end());
-    return result;
+    return std::vector<uint32_t>(std::views::iota(0, Reg_MAX - 1).begin(), std::views::iota(0, Reg_MAX - 1).end());
 }
 
 BNIntrinsicClass YSCArchitecture::GetIntrinsicClass (uint32_t intrinsic)
