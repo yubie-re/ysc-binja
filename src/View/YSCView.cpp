@@ -46,9 +46,16 @@ bool YSCView::Init()
         WritePages(header.m_stringHeapTable, header.m_stringHeapSize, stringOffset, 
             BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable,
             "STRINGS", BNSectionSemantics::ReadOnlyDataSectionSemantics);
-        AddAutoSegment(staticOffset, header.m_staticCount * sizeof(uint64_t), 
-            *header.m_staticsTable, header.m_staticCount * sizeof(uint64_t), BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable);
-        AddAutoSection("STATICS", staticOffset, header.m_staticCount * sizeof(uint64_t), 
+        AddAutoSegment(staticOffset, 4 * header.m_staticCount, 
+            *header.m_staticsTable, 4 * header.m_staticCount, BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable);
+        for(uint32_t i = 0; i < header.m_staticCount; i++)
+        {
+            uint32_t staticVar = 0;
+            GetParentView()->Read(&staticVar, *header.m_staticsTable + i * 8, 4);
+            Write(staticOffset + 4 * i, &staticVar, sizeof(staticVar));
+        }
+
+        AddAutoSection("STATICS", staticOffset, header.m_staticCount * sizeof(uint32_t), 
             BNSectionSemantics::ReadOnlyDataSectionSemantics);
         AddAutoSegment(nativeOffset, header.m_nativesCount * sizeof(uint64_t), 
             0, 0, 0);
@@ -113,8 +120,8 @@ bool YSCView::Init()
 
         for(int i = 0; i < header.m_staticCount; i++)
         {
-            DefineDataVariable(staticOffset + i * 8, BinaryNinja::Type::IntegerType(8, true));
-            DefineAutoSymbol(new BinaryNinja::Symbol(BNSymbolType::DataSymbol, fmt::format("Local_{}", i), staticOffset + i * 8));
+            DefineDataVariable(staticOffset + i * 4, BinaryNinja::Type::IntegerType(4, true));
+            DefineAutoSymbol(new BinaryNinja::Symbol(BNSymbolType::DataSymbol, fmt::format("Local_{}", i), staticOffset + i * 4));
         }
     }
     catch(std::exception& ex)

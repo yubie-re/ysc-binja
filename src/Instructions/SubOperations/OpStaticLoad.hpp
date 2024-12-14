@@ -47,7 +47,7 @@ public:
         if(!il.GetFunction()->GetView()->GetSectionByName("STATICS"))
             return false;
         const auto operand = GetOperand<T>(data, len, 0).ToValue();
-        il.AddInstruction(il.Push(4, il.Load(4, il.Const(4, 8 * operand + il.GetFunction()->GetView()->GetSectionByName("STATICS")->GetStart()))));
+        il.AddInstruction(il.Push(4, il.Load(4, il.Const(4, 4 * operand + il.GetFunction()->GetView()->GetSectionByName("STATICS")->GetStart()))));
         return true;
     }
 };
