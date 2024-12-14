@@ -16,11 +16,12 @@ virtual bool GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLe
 template <typename T>
 const T GetOperand(const uint8_t* data, size_t len, size_t offset)
 {
-    if(len >= sizeof(T))
-        return *reinterpret_cast<const T*>(data);
+    if(len >= sizeof(T) + offset)
+        return *reinterpret_cast<const T*>(data + offset);
     else
         throw std::runtime_error("Operand overflow");
 }
+virtual bool CustomLLILSize() { return false; }
 
 private:
 };

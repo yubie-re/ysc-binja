@@ -28,7 +28,7 @@ bool OpCall::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t
     if(!il.GetFunction()->GetView()->GetSectionByName("CODE"))
         return false;
     const uint32_t operand = Uint24(data) + il.GetFunction()->GetView()->GetSectionByName("CODE")->GetStart();
-    il.AddInstruction(il.Call(il.ConstPointer(4, operand)));
+    il.AddInstruction(il.Call(il.Const(4, operand)));
     return true;
 }
 

@@ -14,8 +14,8 @@ std::string_view OpNative::GetName()
 
 void OpNative::GetInstructionText(const uint8_t* data, uint64_t addr, size_t& len, std::vector<BinaryNinja::InstructionTextToken>& result)
 {
-    const uint8_t retSize = data[0];
-    const uint8_t paramCount = (retSize >> 2) & 63;
+    const uint8_t retSize = data[0] & 3;
+    const uint8_t paramCount = (data[0] >> 2) & 63;
     const int nativeOffset = static_cast<int>((data[1] << 8) | data[2]) * 8;
     OpBase::GetInstructionText(data, addr, len, result);
     result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::IntegerToken, fmt::format("{:#x}", retSize), retSize));
@@ -27,15 +27,14 @@ void OpNative::GetInstructionText(const uint8_t* data, uint64_t addr, size_t& le
 
 bool OpNative::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il)
 {
-    const uint8_t retSize = data[0];
-    const uint8_t paramCount = (retSize >> 2) & 63;
+    const uint8_t retSize = data[0] & 3;
+    const uint8_t paramCount = (data[0] >> 2) & 63;
     const int nativeOffset = static_cast<int>((data[1] << 8) | data[2]) * 8;
     if(il.GetFunction() && il.GetFunction()->GetView())
     {
         if(auto section = il.GetFunction()->GetView()->GetSectionByName("NATIVES"))
         {
-            il.AddInstruction(il.Call(il.ExternPointer(8, il.GetFunction()->GetView()->GetSectionByName("NATIVES")->GetStart() + nativeOffset, 0)));
-            //il.AddInstruction(il.SetRegister(4, Reg_SP, il.Sub(4, il.Register(4, Reg_SP),il.Const(4, (retSize + paramCount) * 4))));
+            il.AddInstruction(il.CallStackAdjust(il.ExternPointer(8, il.GetFunction()->GetView()->GetSectionByName("NATIVES")->GetStart() + nativeOffset, 0), 4*(paramCount - retSize), {}));
         }
         else
             return false;

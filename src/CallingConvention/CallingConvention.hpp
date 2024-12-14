@@ -25,12 +25,12 @@ public:
 
 	virtual std::vector<uint32_t> GetCallerSavedRegisters() override
 	{
-		return std::vector<uint32_t>{ Reg_SP };
+		return std::vector<uint32_t>{  };
 	}
 
 	virtual std::vector<uint32_t> GetCalleeSavedRegisters() override
 	{
-		return std::vector<uint32_t>{ Reg_SP };
+		return std::vector<uint32_t>{ Reg_FP };
 	}
 
 	virtual uint32_t GetIntegerReturnValueRegister() override

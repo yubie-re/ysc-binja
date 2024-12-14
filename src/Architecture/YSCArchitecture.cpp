@@ -36,8 +36,10 @@ bool YSCArchitecture::GetInstructionLowLevelIL(const uint8_t* data, uint64_t add
         return false;
     if(len < m_insns[insn]->GetSize())
         return false;
-    len = m_insns[insn]->GetSize();
+    
     m_insns[insn]->GetInstructionLowLevelIL(data + 1, addr, len, il);
+    if(!m_insns[insn]->CustomLLILSize())
+        len = m_insns[insn]->GetSize();
     return true;
 }
 
@@ -67,7 +69,7 @@ BNIntrinsicClass YSCArchitecture::GetIntrinsicClass (uint32_t intrinsic)
 
 std::string YSCArchitecture::GetIntrinsicName(uint32_t intrinsic)
 {
-    if(intrinsic > Intrin_MAX)
+    if(intrinsic >= Intrin_MAX)
     {
         return "UNKINTRIN";
     }
@@ -89,12 +91,6 @@ std::vector<BinaryNinja::NameAndType> YSCArchitecture::GetIntrinsicInputs(uint32
     std::vector<NameAndType> result;
     switch(intrinsic)
     {
-        case Intrin_STOREN:
-        {
-            result.push_back(NameAndType("memoryStart", Type::IntegerType(4, true)));
-            result.push_back(NameAndType("itemCount", Type::IntegerType(4, true)));
-            break;
-        }
         default:
             break;
     }
@@ -107,11 +103,6 @@ std::vector<BinaryNinja::Confidence<BinaryNinja::Ref<BinaryNinja::Type>>> YSCArc
     std::vector<Confidence<Ref<Type>>> result;
     switch(intrinsic)
     {
-        case Intrin_STOREN:
-        {
-            result.push_back(Type::VoidType());
-            break;
-        }
         default:
             break;
     }

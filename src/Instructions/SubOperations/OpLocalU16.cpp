@@ -22,6 +22,6 @@ void OpLocalU16::GetInstructionText(const uint8_t* data, uint64_t addr, size_t& 
 bool OpLocalU16::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il)
 {
     const uint16_t operand = *reinterpret_cast<const uint16_t*>(data);
-    il.AddInstruction(il.Push(4, il.ConstPointer(4, il.Add(4, il.Const(4, operand * 4), il.Register(4, Reg_FP)))));
+    il.AddInstruction(il.Push(4, il.Sub(4, il.Register(4, Reg_FP), il.Const(4,operand * 4))));
     return true;
 }

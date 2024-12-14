@@ -94,7 +94,7 @@ bool YSCView::Init()
                     found = true;
                     auto nativeStruct = *find;
                     using namespace BinaryNinja;
-                    Ref<Type> returnValue = nativeStruct["return_type"] == "void" ? Type::VoidType() : Type::IntegerType(4, true);
+                    Ref<Type> returnValue = Type::IntegerType(4, true);
                     Ref<CallingConvention> callConvention = GetDefaultArchitecture()->GetDefaultCallingConvention();
                     std::vector<FunctionParameter> params;
                     for(auto& x : nativeStruct["params"])
@@ -110,7 +110,7 @@ bool YSCView::Init()
             if(!found)
             {
                 using namespace BinaryNinja;
-                Ref<Type> returnValue = Type::VoidType();
+                Ref<Type> returnValue = Type::IntegerType(4, true);
                 Ref<CallingConvention> callConvention = GetDefaultArchitecture()->GetDefaultCallingConvention();
                 std::vector<FunctionParameter> params;
                 DefineDataVariable(nativeAddressVirtual, Type::FunctionType(returnValue, callConvention, params, false, 0));

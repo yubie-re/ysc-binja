@@ -14,9 +14,9 @@ std::string_view OpEnter::GetName()
 
 void OpEnter::GetInstructionText(const uint8_t* data, uint64_t addr, size_t& len, std::vector<BinaryNinja::InstructionTextToken>& result)
 {
-    const uint8_t paramCount = data[0];
-    const uint16_t localCount = *reinterpret_cast<const uint16_t*>(&data[1]);
-    const uint8_t nameCount = data[3];
+    const uint8_t paramCount = GetOperand<Op8>(data, len, 0).ToValue();
+    const uint16_t localCount = GetOperand<Op16>(data, len, 1).ToValue();
+    const uint8_t nameCount = GetOperand<Op8>(data, len, 3).ToValue();//always 0
     OpBase::GetInstructionText(data, addr, len, result);
     result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::IntegerToken, fmt::format("{:#x}", paramCount), paramCount));
     result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::OperandSeparatorToken, ", "));
@@ -27,15 +27,13 @@ void OpEnter::GetInstructionText(const uint8_t* data, uint64_t addr, size_t& len
 
 bool OpEnter::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il)
 {
-    const uint8_t paramCount = data[0];
-    const uint16_t localCount = *reinterpret_cast<const uint16_t*>(&data[1]);
-    const uint8_t nameCount = data[3];
-
-    il.AddInstruction(il.Push(4, il.Register(4, Reg_FP)));
-    il.AddInstruction(il.SetRegister(4, Reg_FP, il.Sub(4, il.Register(4, Reg_SP), il.Const(4, (paramCount + 1) * 4))));
+    const uint8_t paramCount = GetOperand<Op8>(data, len, 0).ToValue();
+    const uint16_t localCount = GetOperand<Op16>(data, len, 1).ToValue();
+    const uint8_t nameCount = GetOperand<Op8>(data, len, 3).ToValue();//always 0
+    il.AddInstruction(il.Push(4, il.Register(4, Reg_FP))); // --sp = FP
+    il.AddInstruction(il.SetRegister(4, Reg_FP, il.Add(4, il.Register(4, Reg_SP), il.Const(4, (paramCount) * 4)))); // fp = sp + paramCount (pop off params)
     for(int i = 0; i < localCount; i++)
-        il.AddInstruction(il.Push(4, il.Const(4, 0)));
-    for(int i = 0; i < paramCount; i++)
-        il.AddInstruction(il.Pop(4));
+        il.AddInstruction(il.Push(4, il.Const(4, 0))); // --sp = 0
+    il.AddInstruction(il.SetRegister(4, Reg_SP, il.Add(4, il.Register(4, Reg_SP), il.Const(4, 4 * paramCount)))); // sp += paramCount
     return true;
 }

@@ -33,3 +33,16 @@ bool OpStoreN::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size
     il.MarkLabel(loopExit);
     return true;
 }
+
+
+bool OpStoreN::GetInstructionLowLevelILAlternate(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il, int unrolledCount) 
+{
+    il.AddInstruction(il.SetRegister(4, Reg_R1, il.Pop(4))); // address
+    for(int i = 0; i < unrolledCount; i++)
+    {
+        auto loadAddress = il.Add(4, il.Register(4, Reg_R1), il.Const(4, 4 * (unrolledCount - i - 1)));
+        il.AddInstruction(il.Store(4, loadAddress, il.Pop(4)));
+    }
+    len = 1;
+    return true;
+}

@@ -10,8 +10,6 @@ enum Registers
 {
     Reg_SP,
     Reg_FP,
-    Reg_TMP,
-    Reg_RETADDR,
     Reg_SWITCH,
     Reg_VX1,
     Reg_VY1,
@@ -29,8 +27,6 @@ enum Registers
 const std::array<std::string_view, Reg_MAX> g_RegNames = {
     "SP",
     "FP",
-    "TMP",
-    "RETADDR",
     "SWITCH",
     "VX1",
     "VY1",
@@ -41,17 +37,15 @@ const std::array<std::string_view, Reg_MAX> g_RegNames = {
     "R1",
     "R2",
     "R3",
-    "R4"
+    "R4",
 };
 
 enum Intrin
 {
-    Intrin_STOREN,
     Intrin_MAX
 };
 
 const std::array<std::string_view, Intrin_MAX> g_intrinNames = {
-    "STOREN"
 };
 
 class YSCArchitecture : public BinaryNinja::Architecture
@@ -67,7 +61,7 @@ public:
 
 	size_t GetDefaultIntegerSize() const override { return 4; };
 
-	size_t GetMaxInstructionLength() const override { return 10; };
+	size_t GetMaxInstructionLength() const override { return 100; };
 
 	std::string GetRegisterName(uint32_t reg) override;
 
@@ -92,7 +86,6 @@ public:
     std::vector<BinaryNinja::NameAndType>GetIntrinsicInputs(uint32_t intrinsic) override;
 
     std::vector<BinaryNinja::Confidence<BinaryNinja::Ref<BinaryNinja::Type>>> GetIntrinsicOutputs(uint32_t  intrinsic) override;
-
 private:
     std::array<std::unique_ptr<OpBase>, OP_MAX> m_insns;
 };
