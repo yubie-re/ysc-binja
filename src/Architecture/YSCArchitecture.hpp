@@ -21,6 +21,7 @@ enum Registers
     Reg_VZ2,
     Reg_R1,
     Reg_R2,
+    Reg_R3,
     Reg_MAX
 };
 
@@ -37,7 +38,8 @@ const std::array<std::string_view, Reg_MAX> g_RegNames = {
     "VY2",
     "VZ2",
     "R1",
-    "R2"
+    "R2",
+    "R3"
 };
 
 enum Intrin
