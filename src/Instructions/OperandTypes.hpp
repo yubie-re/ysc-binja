@@ -124,14 +124,16 @@ public:
 #pragma pack()
 
 // Aliases for common operand sizes
-using Op8 = Operand<uint8_t, 1>;
-using Op16 = Operand<uint16_t, 2>;
-using Op24 = Operand<uint32_t, 3>;
-using Op32 = Operand<uint32_t, 4>;
+using OpU8 = Operand<uint8_t, 1>;
+using OpU16 = Operand<uint16_t, 2>;
+using OpU24 = Operand<uint32_t, 3>;
+using OpU32 = Operand<uint32_t, 4>;
+using OpS16 = Operand<int16_t, 2>;
 
-static_assert(sizeof(Op8) == 1);
-static_assert(sizeof(Op16) == 2);
-static_assert(sizeof(Op24) == 3);
-static_assert(sizeof(Op32) == 4);
+
+static_assert(sizeof(OpU8) == 1);
+static_assert(sizeof(OpU16) == 2);
+static_assert(sizeof(OpU24) == 3);
+static_assert(sizeof(OpU32) == 4);
 
 #endif

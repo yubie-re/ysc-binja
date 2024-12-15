@@ -46,7 +46,8 @@ bool YSCArchitecture::GetInstructionLowLevelIL(const uint8_t* data, uint64_t add
 BNRegisterInfo YSCArchitecture::GetRegisterInfo(uint32_t reg)
 {
     BNRegisterInfo info;
-    info.fullWidthRegister = reg;
+    if(reg < Reg_MAX)
+        info.fullWidthRegister = reg;
     info.size = 4;
     info.extend = NoExtend;
     info.offset = 0;

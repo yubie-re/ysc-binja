@@ -78,12 +78,9 @@
 #include "Instructions/SubOperations/OpLocalU16.hpp"
 #include "Instructions/SubOperations/OpLocalU16Load.hpp"
 #include "Instructions/SubOperations/OpLocalU16Store.hpp"
-#include "Instructions/SubOperations/OpGlobalU16.hpp"
-#include "Instructions/SubOperations/OpGlobalU16Load.hpp"
-#include "Instructions/SubOperations/OpGlobalU16Store.hpp"
-#include "Instructions/SubOperations/OpGlobalU24.hpp"
-#include "Instructions/SubOperations/OpGlobalU24Load.hpp"
-#include "Instructions/SubOperations/OpGlobalU24Store.hpp"
+#include "Instructions/SubOperations/OpGlobal.hpp"
+#include "Instructions/SubOperations/OpGlobalLoad.hpp"
+#include "Instructions/SubOperations/OpGlobalStore.hpp"
 #include "Instructions/SubOperations/OpJ.hpp"
 #include "Instructions/SubOperations/OpJz.hpp"
 #include "Instructions/SubOperations/OpIeqJz.hpp"
@@ -164,15 +161,15 @@ YSCArchitecture::YSCArchitecture(const std::string& name) : BinaryNinja::Archite
         std::make_unique<OpStoreRev>(),
         std::make_unique<OpLoadN>(),
         std::make_unique<OpStoreN>(),
-        std::make_unique<OpArray<Op8>>(),
-        std::make_unique<OpArrayLoad<Op8>>(),
-        std::make_unique<OpArrayStore<Op8>>(),
+        std::make_unique<OpArray<OpU8>>(),
+        std::make_unique<OpArrayLoad<OpU8>>(),
+        std::make_unique<OpArrayStore<OpU8>>(),
         std::make_unique<OpLocalU8>(),
         std::make_unique<OpLocalU8Load>(),
         std::make_unique<OpLocalU8Store>(),
-        std::make_unique<OpStatic<Op8>>(),
-        std::make_unique<OpStaticLoad<Op8>>(),
-        std::make_unique<OpStaticStore<Op8>>(),
+        std::make_unique<OpStatic<OpU8>>(),
+        std::make_unique<OpStaticLoad<OpU8>>(),
+        std::make_unique<OpStaticStore<OpU8>>(),
         std::make_unique<OpIaddU8>(),
         std::make_unique<OpImulU8>(),
         std::make_unique<OpIoffset>(),
@@ -185,18 +182,18 @@ YSCArchitecture::YSCArchitecture(const std::string& name) : BinaryNinja::Archite
         std::make_unique<OpIoffsetS16>(),
         std::make_unique<OpIoffsetS16Load>(),
         std::make_unique<OpIoffsetS16Store>(),
-        std::make_unique<OpArray<Op16>>(),
-        std::make_unique<OpArrayLoad<Op16>>(),
-        std::make_unique<OpArrayStore<Op16>>(),
+        std::make_unique<OpArray<OpU16>>(),
+        std::make_unique<OpArrayLoad<OpU16>>(),
+        std::make_unique<OpArrayStore<OpU16>>(),
         std::make_unique<OpLocalU16>(),
         std::make_unique<OpLocalU16Load>(),
         std::make_unique<OpLocalU16Store>(),
-        std::make_unique<OpStatic<Op16>>(),
-        std::make_unique<OpStaticLoad<Op16>>(),
-        std::make_unique<OpStaticStore<Op16>>(),
-        std::make_unique<OpGlobalU16>(),
-        std::make_unique<OpGlobalU16Load>(),
-        std::make_unique<OpGlobalU16Store>(),
+        std::make_unique<OpStatic<OpU16>>(),
+        std::make_unique<OpStaticLoad<OpU16>>(),
+        std::make_unique<OpStaticStore<OpU16>>(),
+        std::make_unique<OpGlobal<OpU16>>(),
+        std::make_unique<OpGlobalLoad<OpU16>>(),
+        std::make_unique<OpGlobalStore<OpU16>>(),
         std::make_unique<OpJ>(),
         std::make_unique<OpJz>(),
         std::make_unique<OpIeqJz>(),
@@ -206,12 +203,12 @@ YSCArchitecture::YSCArchitecture(const std::string& name) : BinaryNinja::Archite
         std::make_unique<OpIltJz>(),
         std::make_unique<OpIleJz>(),
         std::make_unique<OpCall>(),
-        std::make_unique<OpStatic<Op24>>(),
-        std::make_unique<OpStaticLoad<Op24>>(),
-        std::make_unique<OpStaticStore<Op24>>(),
-        std::make_unique<OpGlobalU24>(),
-        std::make_unique<OpGlobalU24Load>(),
-        std::make_unique<OpGlobalU24Store>(),
+        std::make_unique<OpStatic<OpU24>>(),
+        std::make_unique<OpStaticLoad<OpU24>>(),
+        std::make_unique<OpStaticStore<OpU24>>(),
+        std::make_unique<OpGlobal<OpU24>>(),
+        std::make_unique<OpGlobalLoad<OpU24>>(),
+        std::make_unique<OpGlobalStore<OpU24>>(),
         std::make_unique<OpPushConstU24>(),
         std::make_unique<OpSwitch>(),
         std::make_unique<OpString>(),

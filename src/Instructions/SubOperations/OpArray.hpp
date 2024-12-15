@@ -14,11 +14,11 @@ public:
 
     std::string_view GetName() override
     {
-        if constexpr (std::is_same_v<T, Op8>)
+        if constexpr (std::is_same_v<T, OpU8>)
         {
             return "ARRAY_U8";
         }
-        else if constexpr (std::is_same_v<T, Op16>)
+        else if constexpr (std::is_same_v<T, OpU16>)
         {
             return "ARRAY_U16";
         }

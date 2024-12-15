@@ -5,6 +5,7 @@
 #include "inc.hpp"
 #include "../OperationEnum.hpp"
 #include "OpStoreN.hpp"
+#include "OpLoadN.hpp"
 
 class OpPushConst : public OpBase
 {
@@ -29,7 +30,7 @@ public:
     bool GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il) override
     {
         auto arch = BinaryNinja::Architecture::GetByName("YSC");
-        // For the case where it's not a STORE_N in the future
+        // For the case where it's not a STORE/lOAD_N in the future
         auto genericOut = [&]() 
         {
             il.AddInstruction(il.Push(4, il.Const(4, m_int)));
@@ -41,8 +42,8 @@ public:
         bool ilSuccess = arch->GetInstructionLowLevelIL(data + GetSize() - 1, addr + GetSize(), insnLen2, tempIlFunction);
         if(!ilSuccess || len <= (GetSize() + insnLen2 + 1) || insnLen2 == 0)
             return genericOut();
-
-        if(data[GetSize() + insnLen2 - 1] == OP_STORE_N)
+        auto thirdInsn = data[GetSize() + insnLen2 - 1];
+        if(thirdInsn == OP_STORE_N || thirdInsn == OP_LOAD_N)
         {
             insnLen2 = len - GetSize();
             il.SetCurrentAddress(arch, addr + GetSize());
@@ -50,7 +51,10 @@ public:
                 return genericOut();
             il.SetCurrentAddress(arch, addr + GetSize() + insnLen2);
             size_t len3 = len - GetSize() - insnLen2;
-            OpStoreN::GetInstructionLowLevelILAlternate(data + GetSize() - 1 + insnLen2, addr + GetSize() + insnLen2, len3, il, m_int);
+            if(thirdInsn == OP_STORE_N)
+                OpStoreN::GetInstructionLowLevelILAlternate(data + GetSize() - 1 + insnLen2, addr + GetSize() + insnLen2, len3, il, m_int);
+            else
+                OpLoadN::GetInstructionLowLevelILAlternate(data + GetSize() - 1 + insnLen2, addr + GetSize() + insnLen2, len3, il, m_int);
             len = insnLen2 + GetSize() + len3;
         }
         else

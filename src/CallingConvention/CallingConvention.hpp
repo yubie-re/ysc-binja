@@ -30,7 +30,7 @@ public:
 
 	virtual std::vector<uint32_t> GetCalleeSavedRegisters() override
 	{
-		return std::vector<uint32_t>{ Reg_FP };
+		return std::vector<uint32_t>{ Reg_FP, Reg_SP };
 	}
 
 	virtual uint32_t GetIntegerReturnValueRegister() override
