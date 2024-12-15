@@ -60,17 +60,12 @@
 #include "Instructions/SubOperations/OpStatic.hpp"
 #include "Instructions/SubOperations/OpStaticLoad.hpp"
 #include "Instructions/SubOperations/OpStaticStore.hpp"
-#include "Instructions/SubOperations/OpIaddU8.hpp"
-#include "Instructions/SubOperations/OpImulU8.hpp"
+#include "Instructions/SubOperations/OpIaddT.hpp"
+#include "Instructions/SubOperations/OpImulT.hpp"
 #include "Instructions/SubOperations/OpIoffset.hpp"
-#include "Instructions/SubOperations/OpIoffsetU8.hpp"
-#include "Instructions/SubOperations/OpIoffsetU8Load.hpp"
-#include "Instructions/SubOperations/OpIoffsetU8Store.hpp"
-#include "Instructions/SubOperations/OpIaddS16.hpp"
-#include "Instructions/SubOperations/OpImulS16.hpp"
-#include "Instructions/SubOperations/OpIoffsetS16.hpp"
-#include "Instructions/SubOperations/OpIoffsetS16Load.hpp"
-#include "Instructions/SubOperations/OpIoffsetS16Store.hpp"
+#include "Instructions/SubOperations/OpIoffsetT.hpp"
+#include "Instructions/SubOperations/OpIoffsetLoadT.hpp"
+#include "Instructions/SubOperations/OpIoffsetStoreT.hpp"
 #include "Instructions/SubOperations/OpGlobal.hpp"
 #include "Instructions/SubOperations/OpGlobalLoad.hpp"
 #include "Instructions/SubOperations/OpGlobalStore.hpp"
@@ -163,18 +158,18 @@ YSCArchitecture::YSCArchitecture(const std::string& name) : BinaryNinja::Archite
         std::make_unique<OpStatic<OpU8>>(),
         std::make_unique<OpStaticLoad<OpU8>>(),
         std::make_unique<OpStaticStore<OpU8>>(),
-        std::make_unique<OpIaddU8>(),
-        std::make_unique<OpImulU8>(),
+        std::make_unique<OpIaddT<OpU8>>(),
+        std::make_unique<OpImulT<OpU8>>(),
         std::make_unique<OpIoffset>(),
-        std::make_unique<OpIoffsetU8>(),
-        std::make_unique<OpIoffsetU8Load>(),
-        std::make_unique<OpIoffsetU8Store>(),
+        std::make_unique<OpIoffsetT<OpU8>>(),
+        std::make_unique<OpIoffsetLoadT<OpU8>>(),
+        std::make_unique<OpIoffsetStoreT<OpU8>>(),
         std::make_unique<OpPushConstT<OpS16>>(),
-        std::make_unique<OpIaddS16>(),
-        std::make_unique<OpImulS16>(),
-        std::make_unique<OpIoffsetS16>(),
-        std::make_unique<OpIoffsetS16Load>(),
-        std::make_unique<OpIoffsetS16Store>(),
+        std::make_unique<OpIaddT<OpS16>>(),
+        std::make_unique<OpImulT<OpS16>>(),
+        std::make_unique<OpIoffsetT<OpS16>>(),
+        std::make_unique<OpIoffsetLoadT<OpS16>>(),
+        std::make_unique<OpIoffsetStoreT<OpS16>>(),
         std::make_unique<OpArray<OpU16>>(),
         std::make_unique<OpArrayLoad<OpU16>>(),
         std::make_unique<OpArrayStore<OpU16>>(),
