@@ -62,9 +62,9 @@ bool YSCView::Init()
         AddAutoSection("NATIVES", nativeOffset, header.m_nativesCount * sizeof(uint64_t), 
             BNSectionSemantics::ExternalSectionSemantics);
         // globalBlocks[0x12][0x40000]
-        AddAutoSegment(0x60000000, 0x13 * 0x40000, 
+        AddAutoSegment(0x60000000, 0x13 * 0x40000 * 4, 
             0, 0, 0);
-        AddAutoSection("GLOBALS", 0x60000000, 0x13 * 0x40000, 
+        AddAutoSection("GLOBALS", 0x60000000, 0x13 * 0x40000 * 4, 
             BNSectionSemantics::ExternalSectionSemantics);
         
         std::filesystem::path p = std::filesystem::path(BinaryNinja::GetUserPluginDirectory()) / "natives.json";

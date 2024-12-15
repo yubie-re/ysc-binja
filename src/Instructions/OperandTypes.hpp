@@ -129,11 +129,14 @@ using OpU16 = Operand<uint16_t, 2>;
 using OpU24 = Operand<uint32_t, 3>;
 using OpU32 = Operand<uint32_t, 4>;
 using OpS16 = Operand<int16_t, 2>;
+using OpF = Operand<float, 4>;
 
 
 static_assert(sizeof(OpU8) == 1);
 static_assert(sizeof(OpU16) == 2);
+static_assert(sizeof(OpS16) == 2);
 static_assert(sizeof(OpU24) == 3);
 static_assert(sizeof(OpU32) == 4);
+static_assert(sizeof(OpF) == 4);
 
 #endif

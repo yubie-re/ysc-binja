@@ -39,11 +39,8 @@
 #include "Instructions/SubOperations/OpI2F.hpp"
 #include "Instructions/SubOperations/OpF2I.hpp"
 #include "Instructions/SubOperations/OpF2V.hpp"
-#include "Instructions/SubOperations/OpPushConstU8.hpp"
 #include "Instructions/SubOperations/OpPushConstU8U8.hpp"
 #include "Instructions/SubOperations/OpPushConstU8U8U8.hpp"
-#include "Instructions/SubOperations/OpPushConstU32.hpp"
-#include "Instructions/SubOperations/OpPushConstF.hpp"
 #include "Instructions/SubOperations/OpDup.hpp"
 #include "Instructions/SubOperations/OpDrop.hpp"
 #include "Instructions/SubOperations/OpNative.hpp"
@@ -57,9 +54,9 @@
 #include "Instructions/SubOperations/OpArray.hpp"
 #include "Instructions/SubOperations/OpArrayLoad.hpp"
 #include "Instructions/SubOperations/OpArrayStore.hpp"
-#include "Instructions/SubOperations/OpLocalU8.hpp"
-#include "Instructions/SubOperations/OpLocalU8Load.hpp"
-#include "Instructions/SubOperations/OpLocalU8Store.hpp"
+#include "Instructions/SubOperations/OpLocal.hpp"
+#include "Instructions/SubOperations/OpLocalLoad.hpp"
+#include "Instructions/SubOperations/OpLocalStore.hpp"
 #include "Instructions/SubOperations/OpStatic.hpp"
 #include "Instructions/SubOperations/OpStaticLoad.hpp"
 #include "Instructions/SubOperations/OpStaticStore.hpp"
@@ -69,15 +66,11 @@
 #include "Instructions/SubOperations/OpIoffsetU8.hpp"
 #include "Instructions/SubOperations/OpIoffsetU8Load.hpp"
 #include "Instructions/SubOperations/OpIoffsetU8Store.hpp"
-#include "Instructions/SubOperations/OpPushConstS16.hpp"
 #include "Instructions/SubOperations/OpIaddS16.hpp"
 #include "Instructions/SubOperations/OpImulS16.hpp"
 #include "Instructions/SubOperations/OpIoffsetS16.hpp"
 #include "Instructions/SubOperations/OpIoffsetS16Load.hpp"
 #include "Instructions/SubOperations/OpIoffsetS16Store.hpp"
-#include "Instructions/SubOperations/OpLocalU16.hpp"
-#include "Instructions/SubOperations/OpLocalU16Load.hpp"
-#include "Instructions/SubOperations/OpLocalU16Store.hpp"
 #include "Instructions/SubOperations/OpGlobal.hpp"
 #include "Instructions/SubOperations/OpGlobalLoad.hpp"
 #include "Instructions/SubOperations/OpGlobalStore.hpp"
@@ -90,7 +83,7 @@
 #include "Instructions/SubOperations/OpIltJz.hpp"
 #include "Instructions/SubOperations/OpIleJz.hpp"
 #include "Instructions/SubOperations/OpCall.hpp"
-#include "Instructions/SubOperations/OpPushConstU24.hpp"
+#include "Instructions/SubOperations/OpPushConstT.hpp"
 #include "Instructions/SubOperations/OpSwitch.hpp"
 #include "Instructions/SubOperations/OpString.hpp"
 #include "Instructions/SubOperations/OpStringhash.hpp"
@@ -146,11 +139,11 @@ YSCArchitecture::YSCArchitecture(const std::string& name) : BinaryNinja::Archite
         std::make_unique<OpI2F>(),
         std::make_unique<OpF2I>(),
         std::make_unique<OpF2V>(),
-        std::make_unique<OpPushConstU8>(),
+        std::make_unique<OpPushConstT<OpU8>>(),
         std::make_unique<OpPushConstU8U8>(),
         std::make_unique<OpPushConstU8U8U8>(),
-        std::make_unique<OpPushConstU32>(),
-        std::make_unique<OpPushConstF>(),
+        std::make_unique<OpPushConstT<OpU32>>(),
+        std::make_unique<OpPushConstT<OpF>>(),
         std::make_unique<OpDup>(),
         std::make_unique<OpDrop>(),
         std::make_unique<OpNative>(),
@@ -164,9 +157,9 @@ YSCArchitecture::YSCArchitecture(const std::string& name) : BinaryNinja::Archite
         std::make_unique<OpArray<OpU8>>(),
         std::make_unique<OpArrayLoad<OpU8>>(),
         std::make_unique<OpArrayStore<OpU8>>(),
-        std::make_unique<OpLocalU8>(),
-        std::make_unique<OpLocalU8Load>(),
-        std::make_unique<OpLocalU8Store>(),
+        std::make_unique<OpLocal<OpU8>>(),
+        std::make_unique<OpLocalLoad<OpU8>>(),
+        std::make_unique<OpLocalStore<OpU8>>(),
         std::make_unique<OpStatic<OpU8>>(),
         std::make_unique<OpStaticLoad<OpU8>>(),
         std::make_unique<OpStaticStore<OpU8>>(),
@@ -176,7 +169,7 @@ YSCArchitecture::YSCArchitecture(const std::string& name) : BinaryNinja::Archite
         std::make_unique<OpIoffsetU8>(),
         std::make_unique<OpIoffsetU8Load>(),
         std::make_unique<OpIoffsetU8Store>(),
-        std::make_unique<OpPushConstS16>(),
+        std::make_unique<OpPushConstT<OpS16>>(),
         std::make_unique<OpIaddS16>(),
         std::make_unique<OpImulS16>(),
         std::make_unique<OpIoffsetS16>(),
@@ -185,9 +178,9 @@ YSCArchitecture::YSCArchitecture(const std::string& name) : BinaryNinja::Archite
         std::make_unique<OpArray<OpU16>>(),
         std::make_unique<OpArrayLoad<OpU16>>(),
         std::make_unique<OpArrayStore<OpU16>>(),
-        std::make_unique<OpLocalU16>(),
-        std::make_unique<OpLocalU16Load>(),
-        std::make_unique<OpLocalU16Store>(),
+        std::make_unique<OpLocal<OpU16>>(),
+        std::make_unique<OpLocalLoad<OpU16>>(),
+        std::make_unique<OpLocalStore<OpU16>>(),
         std::make_unique<OpStatic<OpU16>>(),
         std::make_unique<OpStaticLoad<OpU16>>(),
         std::make_unique<OpStaticStore<OpU16>>(),
@@ -209,7 +202,7 @@ YSCArchitecture::YSCArchitecture(const std::string& name) : BinaryNinja::Archite
         std::make_unique<OpGlobal<OpU24>>(),
         std::make_unique<OpGlobalLoad<OpU24>>(),
         std::make_unique<OpGlobalStore<OpU24>>(),
-        std::make_unique<OpPushConstU24>(),
+        std::make_unique<OpPushConstT<OpU24>>(),
         std::make_unique<OpSwitch>(),
         std::make_unique<OpString>(),
         std::make_unique<OpStringhash>(),
