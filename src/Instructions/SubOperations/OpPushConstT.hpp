@@ -44,7 +44,7 @@ public:
         OpBase::GetInstructionText(data, addr, len, result);
         if constexpr (std::is_same_v<T, OpF>)
         {
-            result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::IntegerToken, fmt::format("{:.f}", operand.ToValue()), operand.ToValue()));
+            result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::IntegerToken, fmt::format("{:.1f}", operand.ToValue()), operand.ToValue()));
         }
         else
             result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::IntegerToken, fmt::format("{:x}", operand.ToValue()), operand.ToValue()));
