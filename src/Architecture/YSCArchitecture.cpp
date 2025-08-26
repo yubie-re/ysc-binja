@@ -9,9 +9,9 @@ std::string YSCArchitecture::GetRegisterName(uint32_t reg)
     return std::string(g_RegNames[reg]);
 }
 
-/*
+
 bool YSCArchitecture::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen,
-                                         BinaryNinja::Ref<BinaryNinja::BasicBlock> block)
+                                         BinaryNinja::InstructionInfo& result)
 {
     uint8_t insn = data[0];
     if (insn >= OP_MAX)
@@ -19,7 +19,7 @@ bool YSCArchitecture::GetInstructionInfo(const uint8_t* data, uint64_t addr, siz
     m_insns[insn]->GetInstructionInfo(data + 1, addr, maxLen, result);
     return true;
 }
-*/
+
 
 bool YSCArchitecture::GetInstructionText(const uint8_t* data, uint64_t addr, size_t& len,
                                          std::vector<BinaryNinja::InstructionTextToken>& result)
@@ -118,42 +118,58 @@ YSCArchitecture::GetIntrinsicOutputs(uint32_t intrinsic)
     return result;
 }
 
+YSCBlockAnalysisContext::YSCBlockAnalysisContext(BinaryNinja::Function* function,
+                                                 BinaryNinja::BasicBlockAnalysisContext* ctx)
+    : m_function(function), m_ctx(ctx)
+{
+    m_blocksToProcess.push(function->GetStart());
+}
+
+/**
+ * @brief Analyzes the basic blocks of a given function within the specified analysis context.
+ */
 void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, BinaryNinja::BasicBlockAnalysisContext& ctx)
 {
-    BinaryNinja::Ref<BinaryNinja::BinaryView> view = function->GetView();
-    std::queue<uint64_t> blocksToProcess;
-    blocksToProcess.push(function->GetStart());
-    std::unordered_set<uint64_t> seenBlocks;
-    std::unordered_map<uint64_t, BinaryNinja::Ref<BinaryNinja::BasicBlock>> blocks;
-    while (!blocksToProcess.empty())
+    YSCBlockAnalysisContext analysisCtx(function, &ctx);
+    while (!analysisCtx.IsProcessing())
     {
-        if (view->AnalysisIsAborted())
-            break;
-        uint64_t currentAddr = blocksToProcess.front();
-        blocksToProcess.pop();
-        if (seenBlocks.contains(currentAddr))
+        uint64_t currentAddr = analysisCtx.PopNextBlock();
+        if (analysisCtx.HasSeenBlock(currentAddr))
             continue;
-        seenBlocks.insert(currentAddr);
+        analysisCtx.MarkBlockAsSeen(currentAddr);
         BinaryNinja::Ref<BinaryNinja::BasicBlock> block =
             ctx.CreateBasicBlock(function->GetArchitecture(), currentAddr);
-        blocks[currentAddr] = block;
-        bool endsBlock = false;
+        analysisCtx.AddBlock(currentAddr, block);
         while (true)
         {
             uint8_t insn;
-            view->Read(&insn, currentAddr, 1);
-            m_insns[insn]->GetSize();
-            size_t insnSize = m_insns[insn]->GetSize();
-            std::vector<uint8_t> data(insnSize);
-            view->Read(data.data(), currentAddr, insnSize);
-            
+            if (analysisCtx.GetView()->Read(&insn, currentAddr, 1) < 1)
+                break;
+            size_t instrSize = m_insns[insn]->GetSize();
             if (insn >= OP_MAX)
                 break;
+            size_t bytesRead = 0;
 
-            BinaryNinja::InstructionInfo result;
-            m_insns[insn]->GetInstructionInfo(data.data() + 1, currentAddr, insnSize, block);
-            
-            
+            bool endsBlock = m_insns[insn]->GetInstructionBlockAnalysis(analysisCtx, currentAddr, bytesRead);
+
+            if (bytesRead == 0)
+                endsBlock = true;
+
+            if (currentAddr + bytesRead > analysisCtx.GetView()->GetEnd()) // overflow
+                endsBlock = true;
+
+            currentAddr += bytesRead;
+
+            if (endsBlock)
+                break;
+        }
+
+        if (currentAddr != block->GetStart())
+        {
+            block->SetEnd(currentAddr);
+            ctx.AddFunctionBasicBlock(block);
         }
     }
+
+    ctx.Finalize();
 }

@@ -5,6 +5,9 @@
 #include "Instructions/OperationBase.hpp"
 #include <array>
 #include <memory>
+#include <queue>
+#include <unordered_map>
+#include <unordered_set>
 
 enum Registers
 {
@@ -34,6 +37,64 @@ enum Intrin
 };
 
 const std::array<std::string_view, Intrin_MAX> g_intrinNames = {};
+
+class YSCBlockAnalysisContext
+{
+  public:
+    YSCBlockAnalysisContext(BinaryNinja::Function* function, BinaryNinja::BasicBlockAnalysisContext* ctx);
+
+    BinaryNinja::Ref<BinaryNinja::BinaryView> GetView()
+    {
+        return m_function->GetView();
+    }
+
+    bool IsProcessing()
+    {
+        return !m_blocksToProcess.empty() && !GetView()->AnalysisIsAborted();
+    }
+
+    uint64_t PopNextBlock()
+    {
+        uint64_t addr = m_blocksToProcess.front();
+        m_blocksToProcess.pop();
+        return addr;
+    }
+
+    bool HasSeenBlock(uint64_t addr) const
+    {
+        return m_seenBlocks.contains(addr);
+    }
+
+    void MarkBlockAsSeen(uint64_t addr)
+    {
+        m_seenBlocks.insert(addr);
+    }
+
+    void AddBlock(uint64_t addr, BinaryNinja::Ref<BinaryNinja::BasicBlock> block)
+    {
+        m_blocks[addr] = block;
+        m_currentBlock = block;
+    }
+
+    void QueueAddress(uint64_t addr)
+    {
+        m_blocksToProcess.push(addr);
+    }
+
+    BinaryNinja::Ref<BinaryNinja::BasicBlock> GetCurrentBlock()
+    {
+        return m_currentBlock;
+    }
+
+  private:
+    BinaryNinja::Function* m_function;
+    std::queue<uint64_t> m_blocksToProcess;
+    std::unordered_map<uint64_t, BinaryNinja::Ref<BinaryNinja::BasicBlock>> m_blocks;
+    std::unordered_set<uint64_t> m_seenBlocks;
+    BinaryNinja::BasicBlockAnalysisContext* m_ctx;
+    bool m_shouldEndBlock = false;
+    BinaryNinja::Ref<BinaryNinja::BasicBlock> m_currentBlock;
+};
 
 class YSCArchitecture : public BinaryNinja::Architecture
 {
@@ -67,8 +128,7 @@ class YSCArchitecture : public BinaryNinja::Architecture
 
     std::string GetRegisterName(uint32_t reg) override;
 
-    //bool GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen,
-    //                        BinaryNinja::Ref<BinaryNinja::BasicBlock> block) override;
+    bool GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::InstructionInfo& result) override;
 
     bool GetInstructionText(const uint8_t* data, uint64_t addr, size_t& len,
                             std::vector<BinaryNinja::InstructionTextToken>& result) override;

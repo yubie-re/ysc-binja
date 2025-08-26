@@ -12,4 +12,4 @@ SpacesBeforeTrailingComments: 1
 SpaceBeforeParens: ControlStatements
 DerivePointerAlignment: false
 SortIncludes: false
-
+SeparateDefinitionBlocks: Always
