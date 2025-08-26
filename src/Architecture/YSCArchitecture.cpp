@@ -131,6 +131,10 @@ YSCBlockAnalysisContext::YSCBlockAnalysisContext(BinaryNinja::Function* function
 void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, BinaryNinja::BasicBlockAnalysisContext& ctx)
 {
     YSCBlockAnalysisContext analysisCtx(function, &ctx);
+    if(!analysisCtx.IsFirstInstructionEnter())
+    {
+        ctx.Finalize();
+    }
     while (!analysisCtx.IsProcessing())
     {
         uint64_t currentAddr = analysisCtx.PopNextBlock();

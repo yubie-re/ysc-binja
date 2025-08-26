@@ -86,6 +86,13 @@ class YSCBlockAnalysisContext
         return m_currentBlock;
     }
 
+    bool IsFirstInstructionEnter()
+    {
+        uint8_t insn;
+        GetView()->Read(&insn, m_blocksToProcess.front(), 1);
+        return insn == OP_ENTER;
+    }
+
   private:
     BinaryNinja::Function* m_function;
     std::queue<uint64_t> m_blocksToProcess;
