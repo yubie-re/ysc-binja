@@ -75,7 +75,7 @@ bool OpSwitch::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t max
                                   BinaryNinja::InstructionInfo& result)
 {
     OpBase::GetInstructionInfo(data, addr, maxLen, result);
-    result.AddBranch(BNBranchType::IndirectBranch);
+    result.AddBranch(BNBranchType::UnresolvedBranch);
     return true;
 }
 
@@ -86,13 +86,15 @@ bool OpSwitch::GetInstructionBlockAnalysis(YSCBlockAnalysisContext& ctx, size_t 
     uint8_t switchCount = GetOperand<OpU8>(instr, 1).ToValue();
     std::vector<SwitchCase> switchData(static_cast<int>(switchCount));
     ctx.GetView()->Read(switchData.data(), address + GetSize(), sizeof(SwitchCase) * static_cast<int>(switchCount));
-    for (const auto& switchCase : switchData)
+
+    for (int i = 0; i < switchCount; i++)
     {
-        ctx.GetCurrentBlock()->AddPendingOutgoingEdge(BNBranchType::IndirectBranch, address + static_cast<int>(switchCase.m_target));
-        ctx.QueueAddress(address + static_cast<int>(switchCase.m_target));
+        int switchAddress = address + static_cast<int>(switchData[i].m_target) + (i + 1) * 6 + 2;
+        ctx.GetCurrentBlock()->AddPendingOutgoingEdge(BNBranchType::IndirectBranch, switchAddress);
+        ctx.QueueAddress(switchAddress);
     }
-    ctx.GetCurrentBlock()->AddInstructionData(instr.data(), instr.size());
+    
     bytesRead += GetSize();
-    bytesRead += sizeof(SwitchCase) * static_cast<int>(switchCount);
+    ctx.GetCurrentBlock()->AddInstructionData(instr.data(), instr.size());
     return true;
 }

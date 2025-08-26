@@ -42,7 +42,7 @@ bool OpJ::GetInstructionBlockAnalysis(YSCBlockAnalysisContext& ctx, size_t addre
 {
     std::vector<uint8_t> instr(GetSize());
     ctx.GetView()->Read(instr.data(), address, GetSize());
-    size_t jmpAddress = GetOperand<OpU16>(instr, 1).ToValue() + address + 3;
+    size_t jmpAddress = GetOperand<OpS16>(instr, 1).ToValue() + address + 3;
     ctx.GetCurrentBlock()->AddPendingOutgoingEdge(BNBranchType::UnconditionalBranch, jmpAddress);
     ctx.QueueAddress(jmpAddress);
     ctx.GetCurrentBlock()->AddInstructionData(instr.data(), instr.size());

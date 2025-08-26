@@ -46,11 +46,9 @@ bool OpCall::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLe
 
 bool OpCall::GetInstructionBlockAnalysis(YSCBlockAnalysisContext& ctx, size_t address, size_t& bytesRead)
 {
-    if (OpBase::GetInstructionBlockAnalysis(ctx, address, bytesRead))
-        return true;
     std::vector<uint8_t> instr(GetSize());
     ctx.GetView()->Read(instr.data(), address, GetSize());
     ctx.GetCurrentBlock()->AddPendingOutgoingEdge(BNBranchType::CallDestination,
                                                   GetOperand<OpU24>(instr, 1).ToValue() + CODE_OFFSET);
-    return false;
+    return OpBase::GetInstructionBlockAnalysis(ctx, address, bytesRead);
 }

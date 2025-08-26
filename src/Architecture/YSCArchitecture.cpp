@@ -135,7 +135,7 @@ void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, Binary
     {
         ctx.Finalize();
     }
-    while (!analysisCtx.IsProcessing())
+    while (analysisCtx.IsProcessing())
     {
         uint64_t currentAddr = analysisCtx.PopNextBlock();
         if (analysisCtx.HasSeenBlock(currentAddr))
@@ -149,6 +149,10 @@ void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, Binary
             uint8_t insn;
             if (analysisCtx.GetView()->Read(&insn, currentAddr, 1) < 1)
                 break;
+
+            if(insn >= OP_MAX)
+                break;
+
             size_t instrSize = m_insns[insn]->GetSize();
             if (insn >= OP_MAX)
                 break;
