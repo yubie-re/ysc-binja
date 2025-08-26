@@ -14,7 +14,7 @@ bool OpBase::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t
     return true;
 }
 
-bool OpBase::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::InstructionInfo& result)
+bool OpBase::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::Ref<BinaryNinja::BasicBlock> block)
 {
     result.length = GetSize();
     return true;

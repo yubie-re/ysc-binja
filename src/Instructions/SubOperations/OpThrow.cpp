@@ -17,7 +17,7 @@ bool OpThrow::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_
     return true;
 }
 
-bool OpThrow::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::InstructionInfo& result)
+bool OpThrow::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::Ref<BinaryNinja::BasicBlock> block)
 {
     OpBase::GetInstructionInfo(data, addr, maxLen, result);
     result.AddBranch(BNBranchType::UnresolvedBranch);

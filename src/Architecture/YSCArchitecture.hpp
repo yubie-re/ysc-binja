@@ -25,19 +25,7 @@ enum Registers
 };
 
 const std::array<std::string_view, Reg_MAX> g_RegNames = {
-    "SP",
-    "FP",
-    "SWITCH",
-    "VX1",
-    "VY1",
-    "VZ1",
-    "VX2",
-    "VY2",
-    "VZ2",
-    "R1",
-    "R2",
-    "R3",
-    "R4",
+    "SP", "FP", "SWITCH", "VX1", "VY1", "VZ1", "VX2", "VY2", "VZ2", "R1", "R2", "R3", "R4",
 };
 
 enum Intrin
@@ -45,48 +33,69 @@ enum Intrin
     Intrin_MAX
 };
 
-const std::array<std::string_view, Intrin_MAX> g_intrinNames = {
-};
+const std::array<std::string_view, Intrin_MAX> g_intrinNames = {};
 
 class YSCArchitecture : public BinaryNinja::Architecture
 {
-public:
+  public:
     YSCArchitecture(const std::string& name);
 
-    BNEndianness GetEndianness() const override { return BNEndianness::LittleEndian; }
+    BNEndianness GetEndianness() const override
+    {
+        return BNEndianness::LittleEndian;
+    }
 
-    size_t GetAddressSize() const override { return 4; };
+    size_t GetAddressSize() const override
+    {
+        return 4;
+    };
 
-    size_t GetInstructionAlignment() const override { return 1; };
+    size_t GetInstructionAlignment() const override
+    {
+        return 1;
+    };
 
-	size_t GetDefaultIntegerSize() const override { return 4; };
+    size_t GetDefaultIntegerSize() const override
+    {
+        return 4;
+    };
 
-	size_t GetMaxInstructionLength() const override { return 100; };
+    size_t GetMaxInstructionLength() const override
+    {
+        return 100;
+    };
 
-	std::string GetRegisterName(uint32_t reg) override;
+    std::string GetRegisterName(uint32_t reg) override;
 
-	bool GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen,BinaryNinja::InstructionInfo& result) override;
+    //bool GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen,
+    //                        BinaryNinja::Ref<BinaryNinja::BasicBlock> block) override;
 
-	bool GetInstructionText(const uint8_t* data, uint64_t addr, size_t& len,std::vector<BinaryNinja::InstructionTextToken>& result) override;
+    bool GetInstructionText(const uint8_t* data, uint64_t addr, size_t& len,
+                            std::vector<BinaryNinja::InstructionTextToken>& result) override;
 
-	bool GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il) override;
+    bool GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len,
+                                  BinaryNinja::LowLevelILFunction& il) override;
 
-	BNRegisterInfo GetRegisterInfo(uint32_t reg) override;
+    BNRegisterInfo GetRegisterInfo(uint32_t reg) override;
 
-	uint32_t GetStackPointerRegister() override;
+    uint32_t GetStackPointerRegister() override;
 
-	std::vector<uint32_t> GetAllRegisters() override;
+    std::vector<uint32_t> GetAllRegisters() override;
 
-    BNIntrinsicClass GetIntrinsicClass (uint32_t intrinsic) override;
+    BNIntrinsicClass GetIntrinsicClass(uint32_t intrinsic) override;
 
     std::string GetIntrinsicName(uint32_t intrinsic) override;
 
     std::vector<uint32_t> GetAllIntrinsics() override;
 
-    std::vector<BinaryNinja::NameAndType>GetIntrinsicInputs(uint32_t intrinsic) override;
+    std::vector<BinaryNinja::NameAndType> GetIntrinsicInputs(uint32_t intrinsic) override;
 
-    std::vector<BinaryNinja::Confidence<BinaryNinja::Ref<BinaryNinja::Type>>> GetIntrinsicOutputs(uint32_t  intrinsic) override;
-private:
+    std::vector<BinaryNinja::Confidence<BinaryNinja::Ref<BinaryNinja::Type>>>
+    GetIntrinsicOutputs(uint32_t intrinsic) override;
+
+    void AnalyzeBasicBlocks(BinaryNinja::Function* function, BinaryNinja::BasicBlockAnalysisContext& context) override;
+
+  private:
     std::array<std::unique_ptr<OpBase>, OP_MAX> m_insns;
 };
 

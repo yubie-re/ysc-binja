@@ -55,7 +55,7 @@ bool OpLeave::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_
 }
 
 
-bool OpLeave::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::InstructionInfo& result)
+bool OpLeave::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::Ref<BinaryNinja::BasicBlock> block)
 {
     OpBase::GetInstructionInfo(data, addr, maxLen, result);
     result.AddBranch(BNBranchType::FunctionReturn);

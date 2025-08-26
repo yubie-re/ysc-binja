@@ -34,7 +34,7 @@ bool OpIeqJz::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_
     return true;
 }
 
-bool OpIeqJz::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::InstructionInfo& result)
+bool OpIeqJz::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::Ref<BinaryNinja::BasicBlock> block)
 {
     OpBase::GetInstructionInfo(data, addr, maxLen, result);
     const int32_t operand = static_cast<int32_t>(addr) + static_cast<int32_t>(*reinterpret_cast<const int16_t*>(data)) + 3;

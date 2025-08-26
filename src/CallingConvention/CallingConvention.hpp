@@ -1,6 +1,8 @@
 #ifndef CC_HPP
 #define CC_HPP
 
+#include "../Architecture/YSCArchitecture.hpp"
+
 class YSCCallingConvention: public BinaryNinja::CallingConvention
 {
 public:
@@ -40,4 +42,4 @@ public:
 };
 
 
-#endif CC_HPP
+#endif // CC_HPP

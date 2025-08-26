@@ -70,7 +70,7 @@ void OpSwitch::ProcessSwitchCases(std::vector<SwitchCase> switchData, BinaryNinj
     ProcessSwitchCases(switchData, il, switchCount, address, index + 1);
 }
 
-bool OpSwitch::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::InstructionInfo& result)
+bool OpSwitch::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::Ref<BinaryNinja::BasicBlock> block)
 {
     OpBase::GetInstructionInfo(data, addr, maxLen, result);
     result.AddBranch(BNBranchType::IndirectBranch);

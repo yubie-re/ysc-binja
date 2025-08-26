@@ -32,9 +32,9 @@ bool OpCall::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t
     return true;
 }
 
-bool OpCall::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::InstructionInfo& result)
+bool OpCall::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::Ref<BinaryNinja::BasicBlock> block)
 {
-    OpBase::GetInstructionInfo(data, addr, maxLen, result);
+    OpBase::GetInstructionInfo(data, addr, maxLen, block);
     const uint32_t operand = Uint24(data) + CODE_OFFSET;
     result.AddBranch(BNBranchType::CallDestination, operand);
     return true;
