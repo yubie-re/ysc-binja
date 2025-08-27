@@ -1,5 +1,6 @@
 #include "inc.hpp"
 #include "OpThrow.hpp"
+#include "Architecture/YSCArchitecture.hpp"
 
 size_t OpThrow::GetSize()
 {
@@ -21,5 +22,15 @@ bool OpThrow::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxL
 {
     OpBase::GetInstructionInfo(data, addr, maxLen, result);
     result.AddBranch(BNBranchType::UnresolvedBranch);
+    return true;
+}
+
+bool OpThrow::GetInstructionBlockAnalysis(YSCBlockAnalysisContext& ctx, size_t address, size_t& bytesRead)
+{
+    std::vector<uint8_t> instr(GetSize());
+    ctx.GetView()->Read(instr.data(), address, GetSize());
+    ctx.GetCurrentBlock()->AddPendingOutgoingEdge(BNBranchType::UnresolvedBranch, address);
+    ctx.GetCurrentBlock()->AddInstructionData(instr.data(), instr.size());
+    bytesRead += GetSize();
     return true;
 }
