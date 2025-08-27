@@ -93,7 +93,10 @@ bool OpSwitch::GetInstructionBlockAnalysis(YSCBlockAnalysisContext& ctx, size_t 
         ctx.GetCurrentBlock()->AddPendingOutgoingEdge(BNBranchType::IndirectBranch, switchAddress);
         ctx.QueueAddress(switchAddress);
     }
-    
+    uint64_t switchEnd = address + GetSize() + (switchCount * sizeof(SwitchCase));
+    ctx.GetCurrentBlock()->AddPendingOutgoingEdge(BNBranchType::IndirectBranch, switchEnd);
+    ctx.QueueAddress(switchEnd);
+
     bytesRead += GetSize();
     ctx.GetCurrentBlock()->AddInstructionData(instr.data(), instr.size());
     return true;

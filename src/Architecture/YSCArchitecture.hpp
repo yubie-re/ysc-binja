@@ -38,54 +38,80 @@ enum Intrin
 
 const std::array<std::string_view, Intrin_MAX> g_intrinNames = {};
 
+// Context class for managing the analysis of basic blocks in the YSC architecture.
 class YSCBlockAnalysisContext
 {
   public:
+    // Constructor: initializes the context with the function and analysis context.
     YSCBlockAnalysisContext(BinaryNinja::Function* function, BinaryNinja::BasicBlockAnalysisContext* ctx);
 
+    // Returns the BinaryView associated with the function being analyzed.
     BinaryNinja::Ref<BinaryNinja::BinaryView> GetView()
     {
         return m_function->GetView();
     }
 
+    // Returns true if there are blocks left to process and analysis is not aborted.
     bool IsProcessing()
     {
         return !m_blocksToProcess.empty() && !GetView()->AnalysisIsAborted();
     }
 
+    // Pops and returns the address of the next block to process.
     uint64_t PopNextBlock()
     {
         uint64_t addr = m_blocksToProcess.front();
+        m_processingBlocks.erase(addr);
         m_blocksToProcess.pop();
         return addr;
     }
 
+    // Returns true if the block at the given address has already been processed.
     bool HasSeenBlock(uint64_t addr) const
     {
-        return m_seenBlocks.contains(addr);
+        return m_processedBlocks.contains(addr);
     }
 
+    // Marks a block as seen (discovered but not necessarily processed).
     void MarkBlockAsSeen(uint64_t addr)
     {
-        m_seenBlocks.insert(addr);
+        m_processedBlocks.insert(addr);
     }
 
+    // Marks a block as fully processed and removes it from the processing set.
+    void MarkBlockAsProcessed(uint64_t addr)
+    {
+        m_processedBlocks.insert(addr);
+        m_processingBlocks.erase(addr);
+    }
+
+    // Returns true if the block at the given address is currently being processed.
+    bool IsBlockProcessing(uint64_t addr) const
+    {
+        return m_processingBlocks.contains(addr);
+    }
+
+    // Adds a new block to the context for tracking and processing.
     void AddBlock(uint64_t addr, BinaryNinja::Ref<BinaryNinja::BasicBlock> block)
     {
         m_blocks[addr] = block;
         m_currentBlock = block;
     }
 
+    // Queues an address for future block processing.
     void QueueAddress(uint64_t addr)
     {
         m_blocksToProcess.push(addr);
+        m_processingBlocks.insert(addr);
     }
 
+    // Returns the current basic block being analyzed.
     BinaryNinja::Ref<BinaryNinja::BasicBlock> GetCurrentBlock()
     {
         return m_currentBlock;
     }
 
+    // Checks if the first instruction in the next block is an ENTER instruction.
     bool IsFirstInstructionEnter()
     {
         uint8_t insn;
@@ -94,13 +120,14 @@ class YSCBlockAnalysisContext
     }
 
   private:
-    BinaryNinja::Function* m_function;
-    std::queue<uint64_t> m_blocksToProcess;
-    std::unordered_map<uint64_t, BinaryNinja::Ref<BinaryNinja::BasicBlock>> m_blocks;
-    std::unordered_set<uint64_t> m_seenBlocks;
-    BinaryNinja::BasicBlockAnalysisContext* m_ctx;
-    bool m_shouldEndBlock = false;
-    BinaryNinja::Ref<BinaryNinja::BasicBlock> m_currentBlock;
+    BinaryNinja::Function* m_function; // The function being analyzed.
+    std::queue<uint64_t> m_blocksToProcess; // Queue of block addresses to process.
+    std::unordered_map<uint64_t, BinaryNinja::Ref<BinaryNinja::BasicBlock>> m_blocks; // Map of address to basic block objects.
+    std::unordered_set<uint64_t> m_processedBlocks; // Set of addresses of blocks that have been processed.
+    std::unordered_set<uint64_t> m_processingBlocks; // Set of addresses of blocks currently being processed.
+    BinaryNinja::BasicBlockAnalysisContext* m_ctx; // The Binary Ninja block analysis context.
+    bool m_shouldEndBlock = false; // Flag indicating if the current block should be ended.
+    BinaryNinja::Ref<BinaryNinja::BasicBlock> m_currentBlock; // The current block being analyzed.
 };
 
 class YSCArchitecture : public BinaryNinja::Architecture

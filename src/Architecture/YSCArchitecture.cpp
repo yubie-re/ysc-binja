@@ -168,6 +168,12 @@ void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, Binary
 
             currentAddr += bytesRead;
 
+            if(!endsBlock && (analysisCtx.IsBlockProcessing(currentAddr) || analysisCtx.HasSeenBlock(currentAddr)))
+            {
+                endsBlock = true;
+                block->AddPendingOutgoingEdge(BNBranchType::UnconditionalBranch, currentAddr);
+            }
+
             if (endsBlock)
                 break;
         }
