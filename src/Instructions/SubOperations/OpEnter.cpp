@@ -17,12 +17,16 @@ void OpEnter::GetInstructionText(const uint8_t* data, uint64_t addr, size_t& len
     const uint8_t paramCount = GetOperand<OpU8>(data, len, 0).ToValue();
     const uint16_t localCount = GetOperand<OpU16>(data, len, 1).ToValue();
     const uint8_t nameCount = GetOperand<OpU8>(data, len, 3).ToValue();//always 0
+    len += nameCount;
+    std::string_view name(reinterpret_cast<const char*>(data + GetSize()), nameCount);
     OpBase::GetInstructionText(data, addr, len, result);
     result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::IntegerToken, fmt::format("{:#x}", paramCount), paramCount));
     result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::OperandSeparatorToken, ", "));
     result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::IntegerToken, fmt::format("{:#x}", localCount), localCount));
-    result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::OperandSeparatorToken, ", "));
-    result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::IntegerToken, fmt::format("{:#x}", nameCount), nameCount));
+    if(nameCount > 0)
+        result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::OperandSeparatorToken, ", "));
+    if(nameCount > 0)
+        result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::StringToken, fmt::format("\"{}\"", name), 0));
 }
 
 bool OpEnter::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il)
