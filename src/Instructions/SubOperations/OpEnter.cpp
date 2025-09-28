@@ -34,6 +34,7 @@ bool OpEnter::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_
     const uint8_t paramCount = GetOperand<OpU8>(data, len, 0).ToValue();
     const uint16_t localCount = GetOperand<OpU16>(data, len, 1).ToValue();
     const uint8_t nameCount = GetOperand<OpU8>(data, len, 3).ToValue();//always 0
+    len += nameCount;
     il.AddInstruction(il.SetRegister(4, Reg_R1, il.Const(4, 0)));
     il.AddInstruction(il.Push(4, il.Register(4, Reg_FP))); // --sp = FP
     il.AddInstruction(il.SetRegister(4, Reg_FP, il.Add(4, il.Register(4, Reg_SP), il.Const(4, (paramCount) * 4)))); // fp = sp + paramCount (pop off params)
