@@ -18,7 +18,7 @@ void OpEnter::GetInstructionText(const uint8_t* data, uint64_t addr, size_t& len
     const uint16_t localCount = GetOperand<OpU16>(data, len, 1).ToValue();
     const uint8_t nameCount = GetOperand<OpU8>(data, len, 3).ToValue();//always 0
     len += nameCount;
-    std::string_view name(reinterpret_cast<const char*>(data + GetSize()), nameCount);
+    std::string_view name(reinterpret_cast<const char*>(data + 4), nameCount);
     OpBase::GetInstructionText(data, addr, len, result);
     result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::IntegerToken, fmt::format("{:#x}", paramCount), paramCount));
     result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::OperandSeparatorToken, ", "));
