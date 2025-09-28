@@ -101,9 +101,11 @@ class YSCBlockAnalysisContext
     // Queues an address for future block processing.
     void QueueAddress(uint64_t addr)
     {
+        if (m_processedBlocks.contains(addr) || m_processingBlocks.contains(addr))
+            return;
+
         m_blocksToProcess.push(addr);
-        m_processingBlocks.insert(addr);
-    }
+        m_processingBlocks.insert(addr);    }
 
     // Returns the current basic block being analyzed.
     BinaryNinja::Ref<BinaryNinja::BasicBlock> GetCurrentBlock()

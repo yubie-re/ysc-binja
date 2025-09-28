@@ -134,16 +134,24 @@ void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, Binary
     if(!analysisCtx.IsFirstInstructionEnter())
     {
         ctx.Finalize();
+        return;
     }
+    
     while (analysisCtx.IsProcessing())
     {
         uint64_t currentAddr = analysisCtx.PopNextBlock();
+        
+        // Skip if this block has already been processed
         if (analysisCtx.HasSeenBlock(currentAddr))
             continue;
+            
         analysisCtx.MarkBlockAsSeen(currentAddr);
         BinaryNinja::Ref<BinaryNinja::BasicBlock> block =
             ctx.CreateBasicBlock(function->GetArchitecture(), currentAddr);
         analysisCtx.AddBlock(currentAddr, block);
+        
+        uint64_t blockStartAddr = currentAddr;
+        
         while (true)
         {
             uint8_t insn;
@@ -153,24 +161,33 @@ void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, Binary
             if(insn >= OP_MAX)
                 break;
 
-            size_t instrSize = m_insns[insn]->GetSize();
-            if (insn >= OP_MAX)
-                break;
             size_t bytesRead = 0;
-
             bool endsBlock = m_insns[insn]->GetInstructionBlockAnalysis(analysisCtx, currentAddr, bytesRead);
 
             if (bytesRead == 0)
+            {
+                // If no bytes were read, something went wrong - end the block
                 endsBlock = true;
+                break;
+            }
 
-            if (currentAddr + bytesRead > analysisCtx.GetView()->GetEnd()) // overflow
+            if (currentAddr + bytesRead > analysisCtx.GetView()->GetEnd()) // overflow check
+            {
                 endsBlock = true;
+                break;
+            }
 
             currentAddr += bytesRead;
 
-            if(!endsBlock && (analysisCtx.IsBlockProcessing(currentAddr) || analysisCtx.HasSeenBlock(currentAddr)))
+            // Check if we've hit the start of another block that's already been seen or is being processed
+            if(!endsBlock && currentAddr != blockStartAddr && (analysisCtx.IsBlockProcessing(currentAddr) || analysisCtx.HasSeenBlock(currentAddr)))
             {
                 endsBlock = true;
+                // Add edge to the existing block
+                if (!analysisCtx.HasSeenBlock(currentAddr))
+                {
+                    analysisCtx.QueueAddress(currentAddr);
+                }
                 block->AddPendingOutgoingEdge(BNBranchType::UnconditionalBranch, currentAddr);
             }
 
@@ -178,11 +195,14 @@ void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, Binary
                 break;
         }
 
-        if (currentAddr != block->GetStart())
+        // Only add the block if it has instructions (currentAddr moved from start)
+        if (currentAddr > blockStartAddr)
         {
             block->SetEnd(currentAddr);
             ctx.AddFunctionBasicBlock(block);
         }
+        
+        analysisCtx.MarkBlockAsProcessed(blockStartAddr);
     }
 
     ctx.Finalize();
