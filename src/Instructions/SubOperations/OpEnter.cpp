@@ -35,7 +35,7 @@ bool OpEnter::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_
     const uint8_t paramCount = GetOperand<OpU8>(data, len, 0).ToValue();
     const uint16_t localCount = GetOperand<OpU16>(data, len, 1).ToValue();
     const uint8_t nameCount = GetOperand<OpU8>(data, len, 3).ToValue();//always 0
-    len += nameCount;
+    len = GetSize() + nameCount;
     il.AddInstruction(il.SetRegister(4, Reg_R1, il.Const(4, 0)));
     il.AddInstruction(il.Push(4, il.Register(4, Reg_FP))); // --sp = FP
     il.AddInstruction(il.SetRegister(4, Reg_FP, il.Add(4, il.Register(4, Reg_SP), il.Const(4, (paramCount) * 4)))); // fp = sp + paramCount (pop off params)
@@ -43,4 +43,18 @@ bool OpEnter::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_
         il.AddInstruction(il.Push(4, il.Const(4, 0))); // --sp = 0
     il.AddInstruction(il.SetRegister(4, Reg_SP, il.Add(4, il.Register(4, Reg_SP), il.Const(4, 4 * paramCount)))); // sp += paramCount
     return true;
+}
+
+
+bool OpEnter::GetInstructionBlockAnalysis(YSCBlockAnalysisContext& ctx, size_t address, size_t& bytesRead)
+{
+    std::vector<uint8_t> instr(GetSize());
+    ctx.GetView()->Read(instr.data(), address, GetSize());
+    const uint8_t nameCount = GetOperand<OpU8>(instr.data(), 1, 4).ToValue();
+    int len = GetSize() + nameCount;
+    instr.resize(len);
+    ctx.GetView()->Read(instr.data(), address, len);
+    ctx.GetCurrentBlock()->AddInstructionData(instr.data(), instr.size());
+    bytesRead += instr.size();
+    return false;
 }
