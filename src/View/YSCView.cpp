@@ -67,10 +67,19 @@ bool YSCView::Init()
         AddAutoSection("GLOBALS", 0x60000000, 0x13 * 0x40000 * 4, 
             BNSectionSemantics::ExternalSectionSemantics);
         
-        std::filesystem::path p = std::filesystem::path(BinaryNinja::GetUserPluginDirectory()) / "natives.json";
         json j;
-        std::ifstream ifs(p);
-        ifs >> j;
+
+        try
+        {
+            std::filesystem::path p = std::filesystem::path(BinaryNinja::GetUserPluginDirectory()) / "natives.json";
+            std::ifstream ifs(p);
+            ifs >> j;
+        }
+        catch(const std::exception& e)
+        {
+            std::cerr << e.what() << '\n';
+        }
+        
         uint32_t parentNativeTablePtr = *header.m_nativesTable;
         for(int i = 0; i < header.m_nativesCount; i++)
         {
@@ -82,7 +91,15 @@ bool YSCView::Init()
             native = RotLeft(native, i + header.m_codeSize);
             //Write(nativeAddress, &native, 8);
             if(!g_reverseCrossmap.contains(native))
+            {
+                using namespace BinaryNinja;
+                Ref<Type> returnValue = Type::IntegerType(4, true);
+                Ref<CallingConvention> callConvention = GetDefaultArchitecture()->GetDefaultCallingConvention();
+                std::vector<FunctionParameter> params;
+                DefineDataVariable(nativeAddressVirtual, Type::FunctionType(returnValue, callConvention, params, false, 0));
+                DefineAutoSymbol(new Symbol(BNSymbolType::ExternalSymbol, fmt::format("native_{}", native), nativeAddressVirtual));
                 continue;
+            }
             uint64_t nativeDay1 = g_reverseCrossmap.at(native);
             auto jsonHash = fmt::format("0x{:X}", nativeDay1);
             bool found = false;
