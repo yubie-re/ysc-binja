@@ -50,7 +50,7 @@ bool OpEnter::GetInstructionBlockAnalysis(YSCBlockAnalysisContext& ctx, size_t a
 {
     std::vector<uint8_t> instr(GetSize());
     ctx.GetView()->Read(instr.data(), address, GetSize());
-    const uint8_t nameCount = GetOperand<OpU8>(instr.data(), 1, 4).ToValue();
+    const uint8_t nameCount = GetOperand<OpU8>(instr.data(), GetSize(), 4).ToValue();
     int len = GetSize() + nameCount;
     instr.resize(len);
     ctx.GetView()->Read(instr.data(), address, len);
