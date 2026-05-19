@@ -7,7 +7,7 @@ set(BN_INTERNAL_BUILD OFF)
 FetchContent_Declare(
     binaryninjaapi
     GIT_REPOSITORY https://github.com/Vector35/binaryninja-api.git
-    GIT_TAG        acf2e005d3fd454c1c6a0c93224be74dcaef33b7
+    GIT_TAG        745c0b3b806b7e44aba36cf3a8564dfa0631dc8f
     GIT_PROGRESS TRUE
 )
 
