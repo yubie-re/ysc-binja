@@ -16,6 +16,7 @@ void OpSwitch::GetInstructionText(const uint8_t* data, uint64_t addr, size_t& le
                                   std::vector<BinaryNinja::InstructionTextToken>& result)
 {
     const uint8_t switchCount = data[0];
+    len = GetSize() + switchCount * sizeof(SwitchCase);
     OpBase::GetInstructionText(data, addr, len, result);
     result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::IntegerToken,
                                                        fmt::format("{:x}", switchCount), switchCount));
@@ -25,6 +26,7 @@ bool OpSwitch::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size
                                         BinaryNinja::LowLevelILFunction& il)
 {
     const uint8_t switchCount = data[0];
+    len = GetSize() + switchCount * sizeof(SwitchCase);
 
     if (!il.GetFunction())
         return false;
@@ -49,7 +51,7 @@ void OpSwitch::ProcessSwitchCases(std::vector<SwitchCase> switchData, BinaryNinj
         if (branchIlLabelPtr)
             il.AddInstruction(il.Goto(*branchIlLabelPtr));
         else
-            il.AddInstruction(il.Jump(il.Const(4, address + index * 6 + 2)));
+            il.AddInstruction(il.Jump(il.ConstPointer(4, address + index * 6 + 2)));
         return;
     }
 
@@ -64,7 +66,7 @@ void OpSwitch::ProcessSwitchCases(std::vector<SwitchCase> switchData, BinaryNinj
     if (branchIlLabelPtr)
         il.AddInstruction(il.Goto(*branchIlLabelPtr));
     else
-        il.AddInstruction(il.Jump(il.Const(4, address + static_cast<int>(switchCase.m_target) + (index + 1) * 6 + 2)));
+        il.AddInstruction(il.Jump(il.ConstPointer(4, address + static_cast<int>(switchCase.m_target) + (index + 1) * 6 + 2)));
     il.MarkLabel(f);
 
     // Recursive call to process the next switch case
@@ -75,6 +77,8 @@ bool OpSwitch::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t max
                                   BinaryNinja::InstructionInfo& result)
 {
     OpBase::GetInstructionInfo(data, addr, maxLen, result);
+    if (maxLen >= 2)
+        result.length = GetSize() + static_cast<size_t>(data[0]) * sizeof(SwitchCase);
     result.AddBranch(BNBranchType::UnresolvedBranch);
     return true;
 }
@@ -87,18 +91,28 @@ bool OpSwitch::GetInstructionBlockAnalysis(YSCBlockAnalysisContext& ctx, size_t 
     std::vector<SwitchCase> switchData(static_cast<int>(switchCount));
     ctx.GetView()->Read(switchData.data(), address + GetSize(), sizeof(SwitchCase) * static_cast<int>(switchCount));
 
+    YSCSwitchInfo switchInfo;
+    switchInfo.m_address = address;
+    switchInfo.m_caseCount = switchCount;
+    switchInfo.m_tableStart = address + GetSize();
+    switchInfo.m_tableEnd = address + GetSize() + (switchCount * sizeof(SwitchCase));
+
     for (int i = 0; i < switchCount; i++)
     {
         int switchAddress = address + static_cast<int>(switchData[i].m_target) + (i + 1) * 6 + 2;
         ctx.GetCurrentBlock()->AddPendingOutgoingEdge(BNBranchType::IndirectBranch, switchAddress);
         ctx.QueueAddress(switchAddress);
         ctx.GetView()->SetCommentForAddress(switchAddress, fmt::format("Switch case {}", switchData[i].m_case));
+        switchInfo.m_cases.push_back(YSCSwitchCaseInfo{switchData[i].m_case, static_cast<uint64_t>(switchAddress)});
     }
-    uint64_t switchEnd = address + GetSize() + (switchCount * sizeof(SwitchCase));
+    uint64_t switchEnd = switchInfo.m_tableEnd;
     ctx.GetCurrentBlock()->AddPendingOutgoingEdge(BNBranchType::IndirectBranch, switchEnd);
     ctx.QueueAddress(switchEnd);
+    ctx.RecordSwitch(switchInfo);
 
-    bytesRead += GetSize();
+    bytesRead += switchInfo.m_tableEnd - address;
+    instr.resize(bytesRead);
+    ctx.GetView()->Read(instr.data(), address, instr.size());
     ctx.GetCurrentBlock()->AddInstructionData(instr.data(), instr.size());
     
     return true;

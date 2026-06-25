@@ -50,10 +50,20 @@ bool OpEnter::GetInstructionBlockAnalysis(YSCBlockAnalysisContext& ctx, size_t a
 {
     std::vector<uint8_t> instr(GetSize());
     ctx.GetView()->Read(instr.data(), address, GetSize());
+    const uint8_t paramCount = GetOperand<OpU8>(instr.data(), GetSize(), 1).ToValue();
+    const uint16_t localCount = GetOperand<OpU16>(instr.data(), GetSize(), 2).ToValue();
     const uint8_t nameCount = GetOperand<OpU8>(instr.data(), GetSize(), 4).ToValue();
     int len = GetSize() + nameCount;
     instr.resize(len);
     ctx.GetView()->Read(instr.data(), address, len);
+    YSCEnterInfo enterInfo;
+    enterInfo.m_address = address;
+    enterInfo.m_paramCount = paramCount;
+    enterInfo.m_localCount = localCount;
+    enterInfo.m_nameLength = nameCount;
+    if (nameCount > 0)
+        enterInfo.m_name = std::string(reinterpret_cast<const char*>(instr.data() + 5), nameCount);
+    ctx.RecordEnter(enterInfo);
     ctx.GetCurrentBlock()->AddInstructionData(instr.data(), instr.size());
     bytesRead += instr.size();
     return false;

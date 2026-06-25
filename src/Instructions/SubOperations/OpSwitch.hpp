@@ -7,7 +7,7 @@
 struct SwitchCase
 {
     uint32_t m_case;
-    uint16_t m_target;
+    int16_t m_target;
 };
 static_assert(sizeof(SwitchCase) == 6);
 #pragma pack(pop)
@@ -21,6 +21,7 @@ public:
     bool GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il) override;
     bool GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::InstructionInfo& result) override;
     bool GetInstructionBlockAnalysis(YSCBlockAnalysisContext& ctx, size_t address, size_t& bytesRead) override;
+    bool CustomLLILSize() override { return true; }
 private:
     void ProcessSwitchCases(std::vector<SwitchCase> switchData, BinaryNinja::LowLevelILFunction& il, int switchCount, uint64_t address, int index = 0);
 };

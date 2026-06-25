@@ -96,7 +96,7 @@
 #include "Instructions/OperationEnum.hpp"
 #include "CallingConvention/CallingConvention.hpp"
 
-YSCArchitecture::YSCArchitecture(const std::string& name) : BinaryNinja::Architecture(name), m_insns({
+YSCArchitecture::YSCArchitecture(const std::string& name) : BinaryNinja::ArchitectureWithFunctionContext<YSCFunctionContext>(name), m_insns({
         std::make_unique<OpNop>(),
         std::make_unique<OpIadd>(),
         std::make_unique<OpIsub>(),

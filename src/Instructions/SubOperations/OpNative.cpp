@@ -34,7 +34,14 @@ bool OpNative::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size
     {
         if(auto section = il.GetFunction()->GetView()->GetSectionByName("NATIVES"))
         {
-            il.AddInstruction(il.CallStackAdjust(il.ExternPointer(8, il.GetFunction()->GetView()->GetSectionByName("NATIVES")->GetStart() + nativeOffset, 0), 4*(paramCount - retSize), {}));
+            uint64_t nativeAddress = section->GetStart() + nativeOffset;
+            il.AddInstruction(il.CallStackAdjust(il.ExternPointer(8, nativeAddress, 0), 4*(paramCount - retSize), {}));
+
+            if (auto symbol = il.GetFunction()->GetView()->GetSymbolByAddress(nativeAddress))
+            {
+                if (symbol->GetRawName() == "native_SCRIPT_TERMINATE_THIS_THREAD")
+                    il.AddInstruction(il.NoReturn());
+            }
         }
         else
             return false;

@@ -5,6 +5,8 @@
 #include "Instructions/OperationBase.hpp"
 #include <array>
 #include <memory>
+#include <map>
+#include <optional>
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
@@ -24,19 +26,72 @@ enum Registers
     Reg_R2,
     Reg_R3,
     Reg_R4,
+    Reg_ARG0,
+    Reg_ARG1,
+    Reg_ARG2,
+    Reg_ARG3,
+    Reg_ARG4,
+    Reg_ARG5,
+    Reg_ARG6,
+    Reg_ARG7,
+    Reg_ARG8,
+    Reg_ARG9,
+    Reg_ARG10,
+    Reg_ARG11,
+    Reg_ARG12,
+    Reg_ARG13,
+    Reg_ARG14,
+    Reg_ARG15,
     Reg_MAX
 };
 
 const std::array<std::string_view, Reg_MAX> g_RegNames = {
     "SP", "FP", "SWITCH", "VX1", "VY1", "VZ1", "VX2", "VY2", "VZ2", "R1", "R2", "R3", "R4",
+    "ARG0", "ARG1", "ARG2", "ARG3", "ARG4", "ARG5", "ARG6", "ARG7",
+    "ARG8", "ARG9", "ARG10", "ARG11", "ARG12", "ARG13", "ARG14", "ARG15",
 };
 
 enum Intrin
 {
+    Intrin_StringHash,
     Intrin_MAX
 };
 
-const std::array<std::string_view, Intrin_MAX> g_intrinNames = {};
+const std::array<std::string_view, Intrin_MAX> g_intrinNames = {
+    "ysc_string_hash"
+};
+
+struct YSCSwitchCaseInfo
+{
+    uint32_t m_case = 0;
+    uint64_t m_target = 0;
+};
+
+struct YSCSwitchInfo
+{
+    uint64_t m_address = 0;
+    uint8_t m_caseCount = 0;
+    uint64_t m_tableStart = 0;
+    uint64_t m_tableEnd = 0;
+    std::vector<YSCSwitchCaseInfo> m_cases;
+};
+
+struct YSCEnterInfo
+{
+    uint64_t m_address = 0;
+    uint8_t m_paramCount = 0;
+    uint16_t m_localCount = 0;
+    uint8_t m_nameLength = 0;
+    std::string m_name;
+};
+
+struct YSCFunctionContext
+{
+    uint64_t m_start = 0;
+    std::optional<YSCEnterInfo> m_enter;
+    std::optional<uint8_t> m_returnCount;
+    std::map<uint64_t, YSCSwitchInfo> m_switches;
+};
 
 // Context class for managing the analysis of basic blocks in the YSC architecture.
 class YSCBlockAnalysisContext
@@ -105,12 +160,54 @@ class YSCBlockAnalysisContext
             return;
 
         m_blocksToProcess.push(addr);
-        m_processingBlocks.insert(addr);    }
+        m_processingBlocks.insert(addr);
+    }
 
     // Returns the current basic block being analyzed.
     BinaryNinja::Ref<BinaryNinja::BasicBlock> GetCurrentBlock()
     {
         return m_currentBlock;
+    }
+
+    BinaryNinja::BasicBlockAnalysisContext& GetAnalysisContext()
+    {
+        return *m_ctx;
+    }
+
+    void AddCurrentInstructionData(const uint8_t* data, size_t len)
+    {
+        if (m_currentBlock && data && len > 0)
+            m_currentBlock->AddInstructionData(data, len);
+    }
+
+    BinaryNinja::Function* GetFunction()
+    {
+        return m_function;
+    }
+
+    YSCFunctionContext* GetFunctionContext()
+    {
+        return m_functionContext;
+    }
+
+    void RecordEnter(const YSCEnterInfo& enter)
+    {
+        if (m_functionContext)
+            m_functionContext->m_enter = enter;
+    }
+
+    void RecordReturnCount(uint8_t returnCount)
+    {
+        if (!m_functionContext)
+            return;
+        if (!m_functionContext->m_returnCount || returnCount > *m_functionContext->m_returnCount)
+            m_functionContext->m_returnCount = returnCount;
+    }
+
+    void RecordSwitch(const YSCSwitchInfo& switchInfo)
+    {
+        if (m_functionContext)
+            m_functionContext->m_switches[switchInfo.m_address] = switchInfo;
     }
 
     // Checks if the first instruction in the next block is an ENTER instruction.
@@ -128,11 +225,12 @@ class YSCBlockAnalysisContext
     std::unordered_set<uint64_t> m_processedBlocks; // Set of addresses of blocks that have been processed.
     std::unordered_set<uint64_t> m_processingBlocks; // Set of addresses of blocks currently being processed.
     BinaryNinja::BasicBlockAnalysisContext* m_ctx; // The Binary Ninja block analysis context.
+    YSCFunctionContext* m_functionContext = nullptr;
     bool m_shouldEndBlock = false; // Flag indicating if the current block should be ended.
     BinaryNinja::Ref<BinaryNinja::BasicBlock> m_currentBlock; // The current block being analyzed.
 };
 
-class YSCArchitecture : public BinaryNinja::Architecture
+class YSCArchitecture : public BinaryNinja::ArchitectureWithFunctionContext<YSCFunctionContext>
 {
   public:
     YSCArchitecture(const std::string& name);
@@ -190,6 +288,10 @@ class YSCArchitecture : public BinaryNinja::Architecture
     GetIntrinsicOutputs(uint32_t intrinsic) override;
 
     void AnalyzeBasicBlocks(BinaryNinja::Function* function, BinaryNinja::BasicBlockAnalysisContext& context) override;
+
+    bool LiftFunction(BinaryNinja::LowLevelILFunction* function, BinaryNinja::FunctionLifterContext& context) override;
+
+    void FreeFunctionArchContext(YSCFunctionContext* context) override;
 
   private:
     std::array<std::unique_ptr<OpBase>, OP_MAX> m_insns;

@@ -26,7 +26,7 @@ bool OpJ::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& l
     if(branchIlLabelPtr)
         il.AddInstruction(il.Goto(*branchIlLabelPtr));
     else
-        il.AddInstruction(il.Jump(il.Const(4, operand)));
+        il.AddInstruction(il.Jump(il.ConstPointer(4, operand)));
     return true;
 }
 

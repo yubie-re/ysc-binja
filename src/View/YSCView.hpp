@@ -48,7 +48,7 @@ class YSCView : public BinaryNinja::BinaryView
 public:
     YSCView(BinaryView* data) : BinaryView("YSC", data->GetFile(), data), m_parent(data) {};
     bool Init() override;
-    uint64_t PerformGetEntryPoint() const override { return 0; }
+    uint64_t PerformGetEntryPoint() const override { return CODE_OFFSET; }
     bool PerformIsExecutable() const override { return true; }
 private:
     BinaryView* m_parent;

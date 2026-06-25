@@ -30,7 +30,7 @@ bool OpJz::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& 
     if(branchIlLabelPtr)
         il.AddInstruction(il.Goto(*branchIlLabelPtr));
     else
-        il.AddInstruction(il.Jump(il.Const(4, operand)));
+        il.AddInstruction(il.Jump(il.ConstPointer(4, operand)));
     il.MarkLabel(b1);
     return true;
 }
