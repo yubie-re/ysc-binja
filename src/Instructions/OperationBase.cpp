@@ -13,7 +13,7 @@ void OpBase::GetInstructionText(const uint8_t* data, uint64_t addr, size_t& len,
 bool OpBase::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len,
                                       BinaryNinja::LowLevelILFunction& il)
 {
-    il.AddInstruction(il.Unimplemented());
+    il.AddInstruction(il.Nop());
     return true;
 }
 

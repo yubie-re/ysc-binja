@@ -102,7 +102,6 @@ bool OpSwitch::GetInstructionBlockAnalysis(YSCBlockAnalysisContext& ctx, size_t 
         int switchAddress = address + static_cast<int>(switchData[i].m_target) + (i + 1) * 6 + 2;
         ctx.GetCurrentBlock()->AddPendingOutgoingEdge(BNBranchType::IndirectBranch, switchAddress);
         ctx.QueueAddress(switchAddress);
-        ctx.GetView()->SetCommentForAddress(switchAddress, fmt::format("Switch case {}", switchData[i].m_case));
         switchInfo.m_cases.push_back(YSCSwitchCaseInfo{switchData[i].m_case, static_cast<uint64_t>(switchAddress)});
     }
     uint64_t switchEnd = switchInfo.m_tableEnd;

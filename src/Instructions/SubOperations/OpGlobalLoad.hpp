@@ -59,8 +59,6 @@ public:
         uint32_t needle = operand & 0x3FFFF;
         auto view = il.GetFunction()->GetView();
         uint32_t virtualAddress = view->GetSectionByName("GLOBALS")->GetStart() + (blockSize * block + needle) * 4;
-        view->DefineDataVariable(virtualAddress, YSCVolatileGlobalLoadInt32Type());
-        view->DefineAutoSymbol(new BinaryNinja::Symbol(BNSymbolType::DataSymbol, fmt::format("Global_{}", operand), virtualAddress));
         il.AddInstruction(il.Push(4, il.Load(4, il.ConstPointer(4, virtualAddress))));
         return true;
     }

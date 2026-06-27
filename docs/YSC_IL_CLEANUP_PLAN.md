@@ -179,7 +179,7 @@ Previous attempts to create lots of field aliases from `LOAD_N`/`STORE_N` caused
 Chosen approach, in order:
 
 1. **Fix call argument recovery through calling convention + idempotent auto function signatures.**
-2. **Introduce a small `ysc_local_ref(index)` intrinsic only for escaping local-address values.**
+2. **Defer local-address display cleanup until there is a better non-regressive representation.**
 3. **Keep global/runtime array cleanup arithmetic-only and metadata-only; do not auto-create per-field symbols/types.**
 4. **Add regression snapshots before and after each change.**
 
@@ -348,112 +348,27 @@ native_NETWORK_NETWORK_IS_HANDLE_VALID(nullptr, 0xd)
 
 without introducing fake global memory.
 
-### Chosen design
+### Current decision
 
-Add an intrinsic:
+Do not introduce a custom `ysc_local_ref(index)` intrinsic, and do not materialize escaping local addresses as raw FP-relative pointers in call arguments.
 
-```c
-ysc_local_ref(index)
-```
-
-Use this only when a `Value::Kind::LocalAddr` escapes into a call/native/store-through-pointer context.
+Both approaches produce user-visible artifacts that are worse than the previous output in common native-call cases.
 
 Do **not** use a fake `LOCAL_FRAME` section.
 
 Do **not** globally lower local addresses to constant pointers.
 
-### Implementation plan
+### Deferred implementation direction
 
-#### 2.1 Add intrinsic enum
+Keep normal local load/store handling intact. For escaping `Value::Kind::LocalAddr`, leave the existing expression unchanged until one of these can be implemented without broad regressions:
 
-In `YSCArchitecture.hpp`, extend:
-
-```cpp
-enum YSCIntrinsic
-{
-    Intrin_StringHash,
-    Intrin_LocalRef,
-    Intrin_MAX
-};
-```
-
-Update `g_intrinNames`:
-
-```cpp
-"ysc_string_hash",
-"ysc_local_ref"
-```
-
-#### 2.2 Add intrinsic type info
-
-In `YSCArchitecture::GetIntrinsicInputs`:
-
-```cpp
-case Intrin_LocalRef:
-    result.emplace_back("index", Type::IntegerType(4, false));
-    break;
-```
-
-In `GetIntrinsicOutputs`:
-
-```cpp
-case Intrin_LocalRef:
-    result.emplace_back(Type::PointerType(4, Type::VoidType()));
-    break;
-```
-
-If `Type::PointerType(4, ...)` is not accepted in this style, use the architecture-aware overload used elsewhere in the project.
-
-#### 2.3 Add helper in `YSCSymbolicLifter`
-
-Add:
-
-```cpp
-BinaryNinja::ExprId EscapeValueExpr(const Value& value)
-{
-    if (value.kind == Kind::LocalAddr)
-    {
-        uint32_t tmp = CallResultTemp(m_il.GetCurrentAddress() ^ value.index); // or dedicated temp range
-        m_il.AddInstruction(m_il.Intrinsic(
-            {BinaryNinja::RegisterOrFlag::Register(tmp)},
-            Intrin_LocalRef,
-            {m_il.Const(4, value.index)}));
-        return m_il.Register(4, tmp);
-    }
-    return value.expr;
-}
-```
-
-Better: allocate a dedicated temp base, not `CallResultTemp`, to avoid collision:
-
-```cpp
-constexpr uint32_t YSC_LOCAL_REF_TEMP_BASE = 0x90000;
-uint32_t LocalRefTemp(uint32_t index) { return LLIL_TEMP(YSC_LOCAL_REF_TEMP_BASE + index); }
-```
-
-#### 2.4 Use helper in call/native argument setup
-
-In `YSCSymbolicLifter::Native` and `YSCSymbolicLifter::Call`:
-
-Change:
-
-```cpp
-m_il.AddInstruction(m_il.SetRegister(4, ArgReg(argIndex), it->expr));
-```
-
-to:
-
-```cpp
-m_il.AddInstruction(m_il.SetRegister(4, ArgReg(argIndex), EscapeValueExpr(*it)));
-```
-
-Do **not** change `Load`, `Store`, `LoadN`, normal local load/store behavior yet.
+- A BN-supported address-of-local representation at MLIL/HLIL level.
+- A generic, non-native-specific way to preserve source pointer intent through stack-to-register argument setup.
+- A bounded type/model change that improves native pointer arguments without introducing `entry_FP - ...` style regressions.
 
 ### Acceptance tests
 
-1. `native_NETWORK_NETWORK_IS_HANDLE_VALID(nullptr, 0xd)` becomes either:
-   - `native_NETWORK_NETWORK_IS_HANDLE_VALID(ysc_local_ref(0), 0xd)`, or
-   - a named temp derived from `ysc_local_ref(0)`.
+1. No new `entry_FP - ...` regressions in native calls that previously decompiled well.
 
 2. No fake `LOCAL_FRAME` section appears.
 
@@ -463,14 +378,13 @@ Do **not** change `Load`, `Store`, `LoadN`, normal local load/store behavior yet
 
 ### Pros
 
-- Honest representation of VM local references.
-- Bounded and local to escaping values.
+- Avoids custom intrinsic output.
 - Avoids fake memory model.
+- Avoids FP-relative pointer noise in native-call pseudocode.
 
 ### Cons
 
-- Output is custom (`ysc_local_ref`) rather than perfect C `&local_0`.
-- This is still a VM abstraction, not a native pointer.
+- Leaves some local-address native arguments imperfect for now.
 
 ## Phase 3: Global/runtime array cleanup without symbol spam
 
@@ -675,7 +589,7 @@ Expected improvement:
 - `sub_10001c78` recognized as 13-arg function.
 - Calls in `sub_10001c88` display args.
 
-### Step B: Local reference intrinsic
+### Step B: Local reference display
 
 Files:
 
@@ -684,12 +598,8 @@ Files:
 
 Tasks:
 
-1. Add `Intrin_LocalRef`.
-2. Add intrinsic name/input/output definitions.
-3. Add dedicated temp helper.
-4. Add `EscapeValueExpr` helper.
-5. Use in `Native` and `Call` arg setup only.
-6. Build/install/restart/test.
+1. Deferred pending a representation that does not introduce custom intrinsic output or `entry_FP - ...` native-call regressions.
+2. Build/install/restart/test when a new approach exists.
 
 Expected improvement:
 

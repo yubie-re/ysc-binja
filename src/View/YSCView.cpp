@@ -1,15 +1,46 @@
 #include "inc.hpp"
 #include "YSCView.hpp"
+#include "Architecture/YSCArchitecture.hpp"
 #include "Instructions/OperationEnum.hpp"
+#include "Profiling/YSCTrace.hpp"
 #include "Crossmap.hpp"
 #include "json/json.h"
 #include <fstream>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 
 using namespace nlohmann;
 
 #define PAGE_SIZE 0x4000
+
+namespace
+{
+bool GetEnvEnabled(const char* name, bool defaultValue = false)
+{
+    const char* value = std::getenv(name);
+    if (!value)
+        return defaultValue;
+    if (value[0] == '\0' || value[0] == '0')
+        return false;
+    if ((value[0] == 'f' || value[0] == 'F') && value[1] == '\0')
+        return false;
+    return true;
+}
+
+size_t GetEnvSize(const char* name, size_t defaultValue)
+{
+    const char* value = std::getenv(name);
+    if (!value || value[0] == '\0')
+        return defaultValue;
+
+    char* end = nullptr;
+    unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (end == value)
+        return defaultValue;
+    return static_cast<size_t>(parsed);
+}
+}
 
 size_t YSCView::GetPageSize(size_t pageIndex, size_t pageCount, size_t totalSize) const
 {
@@ -68,8 +99,20 @@ static BinaryNinja::Ref<BinaryNinja::Type> NativeJsonTypeToBN(BinaryNinja::Archi
     return Type::IntegerType(4, true);
 }
 
+YSCView::~YSCView()
+{
+    YSC_TRACE_SCOPE("ysc.view", "YSCView::~YSCView");
+    YSCTrace::MemorySnapshot("view.destroy.begin.rssKb");
+    RetireYSCArchitectureView(m_archCacheKey);
+    YSCTrace::MemorySnapshot("view.destroy.end.rssKb");
+    YSCTrace::FlushThrottled();
+}
+
 bool YSCView::Init()
 {
+    YSC_TRACE_SCOPE("ysc.view", "YSCView::Init");
+    m_archCacheKey = MarkYSCArchitectureViewActive(this);
+    YSCTrace::MemorySnapshot("view.init.begin.rssKb");
     try
     {
         SetDefaultArchitecture(BinaryNinja::Architecture::GetByName("YSC"));
@@ -83,20 +126,44 @@ bool YSCView::Init()
         uint32_t globalOffset = staticOffset + header.m_staticCount * 8;
         uint32_t nativeOffset = globalOffset + header.m_globalCount * 8;
         uint32_t memEnd = nativeOffset + header.m_nativesCount;
+        (void) memEnd;
 
-        WritePages(header.m_codeTable, header.m_codeSize, instructionOffset, 
-            BNSegmentFlag::SegmentContainsCode | BNSegmentFlag::SegmentExecutable | BNSegmentFlag::SegmentReadable ,
-            "CODE", BNSectionSemantics::ReadOnlyCodeSectionSemantics);
-        WritePages(header.m_stringHeapTable, header.m_stringHeapSize, stringOffset, 
-            BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable,
-            "STRINGS", BNSectionSemantics::ReadOnlyDataSectionSemantics);
+        YSCTrace::Counter("ysc.view", "codeSize", header.m_codeSize);
+        YSCTrace::Counter("ysc.view", "stringHeapSize", header.m_stringHeapSize);
+        YSCTrace::Counter("ysc.view", "staticCount", header.m_staticCount);
+        YSCTrace::Counter("ysc.view", "globalCount", header.m_globalCount);
+        YSCTrace::Counter("ysc.view", "nativeCount", header.m_nativesCount);
+        size_t functionAnalysisLimit = GetEnvSize("YSC_BINJA_FUNCTION_ANALYSIS_LIMIT", 2048);
+        bool limitCodeScan = functionAnalysisLimit != 0 && header.m_codeSize > 1024 * 1024 &&
+            !GetEnvEnabled("YSC_BINJA_ENABLE_LARGE_SCRIPT_CODE_SCAN");
+        uint32_t codeFlags = BNSegmentFlag::SegmentContainsCode | BNSegmentFlag::SegmentReadable;
+        if (!limitCodeScan)
+            codeFlags |= BNSegmentFlag::SegmentExecutable;
+        YSCTrace::Counter("ysc.view", "codeScanExecutable", limitCodeScan ? 0 : 1);
+
+        {
+            YSC_TRACE_SCOPE("ysc.view", "Write CODE pages");
+            WritePages(header.m_codeTable, header.m_codeSize, instructionOffset,
+                codeFlags,
+                "CODE", BNSectionSemantics::ReadOnlyCodeSectionSemantics);
+        }
+        AddEntryPointForAnalysis(GetDefaultPlatform(), instructionOffset);
+        {
+            YSC_TRACE_SCOPE("ysc.view", "Write STRINGS pages");
+            WritePages(header.m_stringHeapTable, header.m_stringHeapSize, stringOffset,
+                BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable,
+                "STRINGS", BNSectionSemantics::ReadOnlyDataSectionSemantics);
+        }
         AddAutoSegment(staticOffset, 4 * header.m_staticCount, 
             *header.m_staticsTable, 4 * header.m_staticCount, BNSegmentFlag::SegmentContainsData | BNSegmentFlag::SegmentReadable);
-        for(uint32_t i = 0; i < header.m_staticCount; i++)
         {
-            uint32_t staticVar = 0;
-            GetParentView()->Read(&staticVar, *header.m_staticsTable + i * 8, 4);
-            Write(staticOffset + 4 * i, &staticVar, sizeof(staticVar));
+            YSC_TRACE_SCOPE_I("ysc.view", "Copy statics", "count", header.m_staticCount);
+            for(uint32_t i = 0; i < header.m_staticCount; i++)
+            {
+                uint32_t staticVar = 0;
+                GetParentView()->Read(&staticVar, *header.m_staticsTable + i * 8, 4);
+                Write(staticOffset + 4 * i, &staticVar, sizeof(staticVar));
+            }
         }
 
         AddAutoSection("STATICS", staticOffset, header.m_staticCount * sizeof(uint32_t), 
@@ -113,77 +180,94 @@ bool YSCView::Init()
         
         json j;
 
-        try
         {
-            std::filesystem::path p = std::filesystem::path(BinaryNinja::GetUserPluginDirectory()) / "natives.json";
-            std::ifstream ifs(p);
-            ifs >> j;
-        }
-        catch(const std::exception& e)
-        {
-            std::cerr << e.what() << '\n';
+            YSC_TRACE_SCOPE("ysc.view", "Load natives.json");
+            try
+            {
+                std::filesystem::path p = std::filesystem::path(BinaryNinja::GetUserPluginDirectory()) / "natives.json";
+                std::ifstream ifs(p);
+                ifs >> j;
+            }
+            catch(const std::exception& e)
+            {
+                std::cerr << e.what() << '\n';
+            }
         }
         
         uint32_t parentNativeTablePtr = *header.m_nativesTable;
-        for(int i = 0; i < header.m_nativesCount; i++)
         {
-            uint64_t native = 0 ;
-            uint32_t nativeAddressParent = parentNativeTablePtr + i * sizeof(uint64_t);
-            uint32_t nativeAddressVirtual = nativeOffset + i * sizeof(uint64_t);
-            
-            GetParentView()->Read(&native, nativeAddressParent, sizeof(uint64_t));
-            native = RotLeft(native, i + header.m_codeSize);
-            //Write(nativeAddress, &native, 8);
-            if(!g_reverseCrossmap.contains(native))
+            YSC_TRACE_SCOPE_I("ysc.view", "Define native symbols", "count", header.m_nativesCount);
+            for(int i = 0; i < header.m_nativesCount; i++)
             {
-                using namespace BinaryNinja;
-                Ref<Type> returnValue = Type::IntegerType(4, true);
-                Ref<CallingConvention> callConvention = GetDefaultArchitecture()->GetDefaultCallingConvention();
-                std::vector<FunctionParameter> params;
-                DefineDataVariable(nativeAddressVirtual, Type::FunctionType(returnValue, callConvention, params, false, 0));
-                DefineAutoSymbol(new Symbol(BNSymbolType::ExternalSymbol, fmt::format("native_{}", native), nativeAddressVirtual));
-                continue;
-            }
-            uint64_t nativeDay1 = g_reverseCrossmap.at(native);
-            auto jsonHash = fmt::format("0x{:X}", nativeDay1);
-            bool found = false;
-            for (auto& namespce : j.items())
-            {
-                auto find = namespce.value().find(jsonHash);
-                if(find != namespce.value().end())
+                uint64_t native = 0 ;
+                uint32_t nativeAddressParent = parentNativeTablePtr + i * sizeof(uint64_t);
+                uint32_t nativeAddressVirtual = nativeOffset + i * sizeof(uint64_t);
+                
+                GetParentView()->Read(&native, nativeAddressParent, sizeof(uint64_t));
+                native = RotLeft(native, i + header.m_codeSize);
+                //Write(nativeAddress, &native, 8);
+                if(!g_reverseCrossmap.contains(native))
                 {
-                    found = true;
-                    auto nativeStruct = *find;
                     using namespace BinaryNinja;
-                    Ref<Type> returnValue = NativeJsonTypeToBN(GetDefaultArchitecture(), nativeStruct.value("return_type", "int"));
+                    Ref<Type> returnValue = Type::IntegerType(4, true);
                     Ref<CallingConvention> callConvention = GetDefaultArchitecture()->GetDefaultCallingConvention();
                     std::vector<FunctionParameter> params;
-                    for(auto& x : nativeStruct["params"])
-                    {
-                        params.push_back(FunctionParameter(x.value("name", "param"), NativeJsonTypeToBN(GetDefaultArchitecture(), x.value("type", "int"))));
-                    }
                     DefineDataVariable(nativeAddressVirtual, Type::FunctionType(returnValue, callConvention, params, false, 0));
-                    DefineAutoSymbol(new Symbol(BNSymbolType::ExternalSymbol, fmt::format("native_{}_{}", namespce.key(), nativeStruct["name"].get<std::string>()), nativeAddressVirtual));
-                    break;
+                    DefineAutoSymbol(new Symbol(BNSymbolType::ExternalSymbol, fmt::format("native_{}", native), nativeAddressVirtual));
+                    continue;
+                }
+                uint64_t nativeDay1 = g_reverseCrossmap.at(native);
+                auto jsonHash = fmt::format("0x{:X}", nativeDay1);
+                bool found = false;
+                for (auto& namespce : j.items())
+                {
+                    auto find = namespce.value().find(jsonHash);
+                    if(find != namespce.value().end())
+                    {
+                        found = true;
+                        auto nativeStruct = *find;
+                        using namespace BinaryNinja;
+                        Ref<Type> returnValue = NativeJsonTypeToBN(GetDefaultArchitecture(), nativeStruct.value("return_type", "int"));
+                        Ref<CallingConvention> callConvention = GetDefaultArchitecture()->GetDefaultCallingConvention();
+                        std::vector<FunctionParameter> params;
+                        for(auto& x : nativeStruct["params"])
+                        {
+                            params.push_back(FunctionParameter(x.value("name", "param"), NativeJsonTypeToBN(GetDefaultArchitecture(), x.value("type", "int"))));
+                        }
+                        DefineDataVariable(nativeAddressVirtual, Type::FunctionType(returnValue, callConvention, params, false, 0));
+                        DefineAutoSymbol(new Symbol(BNSymbolType::ExternalSymbol, fmt::format("native_{}_{}", namespce.key(), nativeStruct["name"].get<std::string>()), nativeAddressVirtual));
+                        break;
+                    }
+                }
+
+                if(!found)
+                {
+                    using namespace BinaryNinja;
+                    Ref<Type> returnValue = Type::IntegerType(4, true);
+                    Ref<CallingConvention> callConvention = GetDefaultArchitecture()->GetDefaultCallingConvention();
+                    std::vector<FunctionParameter> params;
+                    DefineDataVariable(nativeAddressVirtual, Type::FunctionType(returnValue, callConvention, params, false, 0));
+                    DefineAutoSymbol(new Symbol(BNSymbolType::ExternalSymbol, fmt::format("native_{}", native), nativeAddressVirtual));
                 }
             }
+        }
 
-            if(!found)
+        size_t staticSymbolLimit = GetEnvSize("YSC_BINJA_STATIC_SYMBOL_LIMIT", 4096);
+        if (header.m_staticCount <= staticSymbolLimit)
+        {
+            YSC_TRACE_SCOPE_I("ysc.view", "Define static symbols", "count", header.m_staticCount);
+            for(uint32_t i = 0; i < header.m_staticCount; i++)
             {
-                using namespace BinaryNinja;
-                Ref<Type> returnValue = Type::IntegerType(4, true);
-                Ref<CallingConvention> callConvention = GetDefaultArchitecture()->GetDefaultCallingConvention();
-                std::vector<FunctionParameter> params;
-                DefineDataVariable(nativeAddressVirtual, Type::FunctionType(returnValue, callConvention, params, false, 0));
-                DefineAutoSymbol(new Symbol(BNSymbolType::ExternalSymbol, fmt::format("native_{}", native), nativeAddressVirtual));
+                DefineDataVariable(staticOffset + i * 4, BinaryNinja::Type::IntegerType(4, true));
+                DefineAutoSymbol(new BinaryNinja::Symbol(BNSymbolType::DataSymbol, fmt::format("Local_{}", i), staticOffset + i * 4));
             }
         }
-
-        for(int i = 0; i < header.m_staticCount; i++)
+        else
         {
-            DefineDataVariable(staticOffset + i * 4, BinaryNinja::Type::IntegerType(4, true));
-            DefineAutoSymbol(new BinaryNinja::Symbol(BNSymbolType::DataSymbol, fmt::format("Local_{}", i), staticOffset + i * 4));
+            YSCTrace::InstantInt("ysc.view", "Skipped eager static symbols", "count", header.m_staticCount);
         }
+        YSCTrace::MemorySnapshot("view.init.end.rssKb");
+        YSCTrace::Flush();
     }
     catch(std::exception& ex)
     {

@@ -5,6 +5,12 @@
 
 class YSCCallingConvention: public BinaryNinja::CallingConvention
 {
+private:
+    static bool IsArgRegister(uint64_t reg)
+    {
+        return reg >= Reg_ARG0 && reg <= Reg_ARG15;
+    }
+
 public:
 	YSCCallingConvention(BinaryNinja::Architecture* arch): BinaryNinja::CallingConvention(arch, "sccall")
 	{
@@ -58,6 +64,22 @@ public:
 	{
 		return Reg_R1;
 	}
+
+    virtual BinaryNinja::Variable GetIncomingVariableForParameterVariable(const BinaryNinja::Variable& var,
+                                                                          BinaryNinja::Function* func) override
+    {
+        if (var.type == RegisterVariableSourceType && IsArgRegister(var.storage))
+            return var;
+        return BinaryNinja::CallingConvention::GetIncomingVariableForParameterVariable(var, func);
+    }
+
+    virtual BinaryNinja::Variable GetParameterVariableForIncomingVariable(const BinaryNinja::Variable& var,
+                                                                          BinaryNinja::Function* func) override
+    {
+        if (var.type == RegisterVariableSourceType && IsArgRegister(var.storage))
+            return var;
+        return BinaryNinja::CallingConvention::GetParameterVariableForIncomingVariable(var, func);
+    }
 };
 
 

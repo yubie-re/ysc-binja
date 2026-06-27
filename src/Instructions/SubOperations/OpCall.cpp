@@ -39,16 +39,10 @@ bool OpCall::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t
 bool OpCall::GetInstructionInfo(const uint8_t* data, uint64_t addr, size_t maxLen, BinaryNinja::InstructionInfo& result)
 {
     OpBase::GetInstructionInfo(data, addr, maxLen, result);
-    const uint32_t operand = Uint24(data) + CODE_OFFSET;
-    result.AddBranch(BNBranchType::CallDestination, operand);
     return true;
 }
 
 bool OpCall::GetInstructionBlockAnalysis(YSCBlockAnalysisContext& ctx, size_t address, size_t& bytesRead)
 {
-    std::vector<uint8_t> instr(GetSize());
-    ctx.GetView()->Read(instr.data(), address, GetSize());
-    ctx.GetCurrentBlock()->AddPendingOutgoingEdge(BNBranchType::CallDestination,
-                                                  GetOperand<OpU24>(instr, 1).ToValue() + CODE_OFFSET);
     return OpBase::GetInstructionBlockAnalysis(ctx, address, bytesRead);
 }

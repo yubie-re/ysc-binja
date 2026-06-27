@@ -4,12 +4,16 @@
 #include "Instructions/OperationEnum.hpp"
 #include "Instructions/OperationBase.hpp"
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <map>
 #include <optional>
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
+
+uintptr_t MarkYSCArchitectureViewActive(BinaryNinja::BinaryView* view);
+void RetireYSCArchitectureView(uintptr_t key);
 
 enum Registers
 {
@@ -92,6 +96,9 @@ struct YSCFunctionContext
     std::optional<uint8_t> m_returnCount;
     std::map<uint64_t, YSCSwitchInfo> m_switches;
 };
+
+constexpr size_t YSC_MAX_INSTRUCTION_LENGTH = BN_MAX_INSTRUCTION_LENGTH;
+constexpr size_t YSC_MAX_INTERNAL_INSTRUCTION_LENGTH = 2 + 255 * 6;
 
 // Context class for managing the analysis of basic blocks in the YSC architecture.
 class YSCBlockAnalysisContext
@@ -187,7 +194,7 @@ class YSCBlockAnalysisContext
 
     YSCFunctionContext* GetFunctionContext()
     {
-        return m_functionContext;
+        return m_functionContext.get();
     }
 
     void RecordEnter(const YSCEnterInfo& enter)
@@ -225,7 +232,7 @@ class YSCBlockAnalysisContext
     std::unordered_set<uint64_t> m_processedBlocks; // Set of addresses of blocks that have been processed.
     std::unordered_set<uint64_t> m_processingBlocks; // Set of addresses of blocks currently being processed.
     BinaryNinja::BasicBlockAnalysisContext* m_ctx; // The Binary Ninja block analysis context.
-    YSCFunctionContext* m_functionContext = nullptr;
+    std::unique_ptr<YSCFunctionContext> m_functionContext;
     bool m_shouldEndBlock = false; // Flag indicating if the current block should be ended.
     BinaryNinja::Ref<BinaryNinja::BasicBlock> m_currentBlock; // The current block being analyzed.
 };
@@ -257,7 +264,7 @@ class YSCArchitecture : public BinaryNinja::ArchitectureWithFunctionContext<YSCF
 
     size_t GetMaxInstructionLength() const override
     {
-        return 100;
+        return YSC_MAX_INSTRUCTION_LENGTH;
     };
 
     std::string GetRegisterName(uint32_t reg) override;

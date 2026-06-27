@@ -29,7 +29,6 @@ bool OpThrow::GetInstructionBlockAnalysis(YSCBlockAnalysisContext& ctx, size_t a
 {
     std::vector<uint8_t> instr(GetSize());
     ctx.GetView()->Read(instr.data(), address, GetSize());
-    ctx.GetCurrentBlock()->AddPendingOutgoingEdge(BNBranchType::UnresolvedBranch, address);
     ctx.GetCurrentBlock()->AddInstructionData(instr.data(), instr.size());
     bytesRead += GetSize();
     return true;

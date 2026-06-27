@@ -2,12 +2,16 @@
 #include "YSCArchitecture.hpp"
 #include "Instructions/OperationEnum.hpp"
 #include "Instructions/SubOperations/OpSwitch.hpp"
+#include "Profiling/YSCTrace.hpp"
 #include "Uint24.hpp"
 #include "lowlevelilinstruction.h"
+#include <cstdlib>
+#include <cstdint>
 #include <map>
 #include <mutex>
 #include <queue>
 #include <set>
+#include <unordered_map>
 
 namespace
 {
@@ -16,6 +20,10 @@ constexpr uint32_t YSC_STACK_TEMP_BASE = 0x20000;
 constexpr uint32_t YSC_CALL_RESULT_TEMP_BASE = 0x80000;
 constexpr uint64_t YSC_WHOLE_FUNCTION_LIFT_SIZE_LIMIT = 2048;
 constexpr size_t YSC_STACK_ANALYSIS_WORK_LIMIT = 4096;
+constexpr size_t YSC_FUNCTION_ANALYSIS_FANOUT_LIMIT = 2048;
+constexpr size_t YSC_MAX_RUNTIME_ARRAY_OFFSET_ALIASES_PER_BASE = 16;
+constexpr bool YSC_ENABLE_AUTO_FUNCTION_SIGNATURES = false;
+constexpr bool YSC_ENABLE_RUNTIME_ARRAY_METADATA = false;
 
 struct YSCLiftDiagnostic
 {
@@ -27,6 +35,31 @@ struct YSCLiftDiagnostic
     int otherDepth = 0;
     size_t totalSize = 0;
 };
+
+bool YSCEnvEnabled(const char* name, bool defaultValue = false)
+{
+    const char* value = std::getenv(name);
+    if (!value)
+        return defaultValue;
+    if (value[0] == '\0' || value[0] == '0')
+        return false;
+    if ((value[0] == 'f' || value[0] == 'F') && value[1] == '\0')
+        return false;
+    return true;
+}
+
+size_t YSCEnvSize(const char* name, size_t defaultValue)
+{
+    const char* value = std::getenv(name);
+    if (!value || value[0] == '\0')
+        return defaultValue;
+
+    char* end = nullptr;
+    unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (end == value)
+        return defaultValue;
+    return static_cast<size_t>(parsed);
+}
 
 const char* OpcodeName(uint8_t opcode)
 {
@@ -79,15 +112,111 @@ bool IsEnterAt(BinaryNinja::BinaryView* view, uint64_t addr)
     return view && view->Read(&op, addr, 1) == 1 && op == OP_ENTER;
 }
 
-uint8_t GetEnterParamCount(BinaryNinja::BinaryView* view, uint64_t addr)
+std::optional<YSCEnterInfo> ReadEnterInfoRaw(BinaryNinja::BinaryView* view, uint64_t addr)
 {
-    uint8_t data[5] = {};
-    if (!IsEnterAt(view, addr) || view->Read(data, addr, sizeof(data)) < sizeof(data))
-        return 0;
-    return data[1];
+    uint8_t header[5] = {};
+    if (!IsEnterAt(view, addr) || view->Read(header, addr, sizeof(header)) < sizeof(header))
+        return std::nullopt;
+
+    YSCEnterInfo enter;
+    enter.m_address = addr;
+    enter.m_paramCount = header[1];
+    enter.m_localCount = ReadUnaligned<uint16_t>(header + 2);
+    enter.m_nameLength = header[4];
+    if (enter.m_nameLength > 0)
+    {
+        std::vector<char> name(enter.m_nameLength);
+        if (view->Read(name.data(), addr + 5, name.size()) == name.size())
+            enter.m_name.assign(name.data(), name.size());
+    }
+    return enter;
 }
 
-uint8_t FindFirstLeaveReturnCount(BinaryNinja::BinaryView* view, uint64_t addr)
+struct YSCFunctionFactCache
+{
+    std::unordered_map<uint64_t, std::optional<YSCEnterInfo>> enterInfo;
+    std::unordered_map<uint64_t, uint8_t> returnCounts;
+    size_t enterHits = 0;
+    size_t enterMisses = 0;
+    size_t returnHits = 0;
+    size_t returnMisses = 0;
+};
+
+uintptr_t GetYSCViewCacheKey(BinaryNinja::BinaryView* view)
+{
+    if (!view)
+        return 0;
+    if (auto object = view->GetObject())
+        return reinterpret_cast<uintptr_t>(object);
+    return reinterpret_cast<uintptr_t>(view);
+}
+
+std::mutex g_functionFactMutex;
+std::unordered_map<uintptr_t, std::shared_ptr<YSCFunctionFactCache>> g_functionFactCache;
+std::mutex g_viewLifetimeMutex;
+std::unordered_set<uintptr_t> g_retiredViewKeys;
+
+bool IsYSCViewKeyRetired(uintptr_t key)
+{
+    if (key == 0)
+        return true;
+    std::lock_guard<std::mutex> guard(g_viewLifetimeMutex);
+    return g_retiredViewKeys.contains(key);
+}
+
+bool IsYSCArchitectureViewRetired(BinaryNinja::BinaryView* view)
+{
+    return IsYSCViewKeyRetired(GetYSCViewCacheKey(view));
+}
+
+std::shared_ptr<YSCFunctionFactCache> GetYSCFunctionFactCache(BinaryNinja::BinaryView* view)
+{
+    uintptr_t key = GetYSCViewCacheKey(view);
+    if (key == 0 || IsYSCViewKeyRetired(key))
+        return nullptr;
+
+    std::lock_guard<std::mutex> guard(g_functionFactMutex);
+    auto it = g_functionFactCache.find(key);
+    if (it != g_functionFactCache.end())
+        return it->second;
+
+    auto cache = std::make_shared<YSCFunctionFactCache>();
+    g_functionFactCache[key] = cache;
+    return cache;
+}
+
+std::optional<YSCEnterInfo> ReadEnterInfo(BinaryNinja::BinaryView* view, uint64_t addr)
+{
+    auto cache = GetYSCFunctionFactCache(view);
+    if (!cache)
+        return std::nullopt;
+
+    {
+        std::lock_guard<std::mutex> guard(g_functionFactMutex);
+        auto cached = cache->enterInfo.find(addr);
+        if (cached != cache->enterInfo.end())
+        {
+            cache->enterHits++;
+            return cached->second;
+        }
+        cache->enterMisses++;
+    }
+
+    auto result = ReadEnterInfoRaw(view, addr);
+    {
+        std::lock_guard<std::mutex> guard(g_functionFactMutex);
+        cache->enterInfo[addr] = result;
+    }
+    return result;
+}
+
+uint8_t GetEnterParamCount(BinaryNinja::BinaryView* view, uint64_t addr)
+{
+    auto enter = ReadEnterInfo(view, addr);
+    return enter ? enter->m_paramCount : 0;
+}
+
+uint8_t FindFirstLeaveReturnCountRaw(BinaryNinja::BinaryView* view, uint64_t addr)
 {
     if (!view || !IsEnterAt(view, addr))
         return 0;
@@ -198,9 +327,36 @@ uint8_t FindFirstLeaveReturnCount(BinaryNinja::BinaryView* view, uint64_t addr)
             size = 1;
             break;
         }
+        if (cursor + size <= cursor || cursor + size > codeEnd)
+            return 0;
         cursor += size;
     }
     return 0;
+}
+
+uint8_t FindFirstLeaveReturnCount(BinaryNinja::BinaryView* view, uint64_t addr)
+{
+    auto cache = GetYSCFunctionFactCache(view);
+    if (!cache)
+        return 0;
+
+    {
+        std::lock_guard<std::mutex> guard(g_functionFactMutex);
+        auto cached = cache->returnCounts.find(addr);
+        if (cached != cache->returnCounts.end())
+        {
+            cache->returnHits++;
+            return cached->second;
+        }
+        cache->returnMisses++;
+    }
+
+    uint8_t result = FindFirstLeaveReturnCountRaw(view, addr);
+    {
+        std::lock_guard<std::mutex> guard(g_functionFactMutex);
+        cache->returnCounts[addr] = result;
+    }
+    return result;
 }
 
 uint32_t LocalTemp(uint32_t index)
@@ -235,15 +391,64 @@ BinaryNinja::Ref<BinaryNinja::Type> VolatileInt32Type()
     return builder.Finalize();
 }
 
+void DefineAutoInt32DataSymbol(BinaryNinja::BinaryView* view, uint64_t address, const std::string& name)
+{
+    if (!view)
+        return;
+
+    BinaryNinja::DataVariable existingVariable {};
+    if (!view->GetDataVariableAtAddress(address, existingVariable))
+        view->DefineDataVariable(address, VolatileInt32Type());
+
+    if (view->GetSymbolByAddress(address))
+        return;
+
+    view->DefineAutoSymbol(new BinaryNinja::Symbol(BNSymbolType::DataSymbol, name, address));
+}
+
+bool ExistingAutoSignatureMatches(BinaryNinja::Function* function, uint8_t paramCount, uint8_t retCount)
+{
+    if (!function)
+        return false;
+
+    auto type = function->GetType();
+    if (!type)
+        return false;
+
+    auto params = type->GetParameters();
+    if (params.size() != paramCount)
+        return false;
+
+    for (uint8_t i = 0; i < paramCount; i++)
+    {
+        if (params[i].defaultLocation)
+            return false;
+        if (params[i].location.type != RegisterVariableSourceType || params[i].location.storage != ArgReg(i))
+            return false;
+    }
+
+    auto returnType = type->GetChildType();
+    if (!returnType)
+        return false;
+    bool returnsVoid = returnType->GetClass() == VoidTypeClass;
+    return (retCount == 0) == returnsVoid;
+}
+
 void ApplyYSCFunctionType(BinaryNinja::Function* function, BinaryNinja::BinaryView* view,
                           const std::optional<YSCEnterInfo>& enter, const std::optional<uint8_t>& analyzedReturnCount)
 {
+    if (!YSC_ENABLE_AUTO_FUNCTION_SIGNATURES)
+        return;
     if (!function || !view || !enter)
         return;
     if (enter->m_paramCount > 16)
         return;
 
     using namespace BinaryNinja;
+    uint8_t retCount = analyzedReturnCount.value_or(FindFirstLeaveReturnCount(view, function->GetStart()));
+    if (ExistingAutoSignatureMatches(function, enter->m_paramCount, retCount))
+        return;
+
     std::vector<FunctionParameter> params;
     std::vector<Variable> paramVars;
     params.reserve(enter->m_paramCount);
@@ -257,16 +462,301 @@ void ApplyYSCFunctionType(BinaryNinja::Function* function, BinaryNinja::BinaryVi
         function->CreateAutoVariable(paramVar, paramType, fmt::format("arg{}", i + 1), true);
     }
 
-    uint8_t retCount = analyzedReturnCount.value_or(FindFirstLeaveReturnCount(view, function->GetStart()));
     Ref<Type> returnType = retCount > 0 ? Type::IntegerType(4, true) : Type::VoidType();
     auto cc = function->GetArchitecture()->GetDefaultCallingConvention();
     function->SetAutoType(Type::FunctionType(returnType, cc, params, false, 0));
     function->SetAutoParameterVariables(Confidence<std::vector<Variable>>(paramVars, 255));
 }
 
+void ApplyYSCFunctionTypeAt(BinaryNinja::Function* function, BinaryNinja::BinaryView* view, uint64_t addr)
+{
+    auto enter = ReadEnterInfo(view, addr);
+    if (!enter)
+        return;
+    ApplyYSCFunctionType(function, view, enter, FindFirstLeaveReturnCount(view, addr));
+}
+
 size_t GetRawInstructionLength(BinaryNinja::BinaryView* view, uint64_t addr, const uint8_t* data, size_t len);
 bool IsZeroReturnLeaveBlock(BinaryNinja::BinaryView* view, const BinaryNinja::Ref<BinaryNinja::BasicBlock>& block,
                             size_t maxInstructionLength);
+
+uint64_t GetCodeEnd(BinaryNinja::BinaryView* view)
+{
+    if (!view)
+        return 0;
+    auto code = view->GetSectionByName("CODE");
+    return code ? code->GetEnd() : view->GetEnd();
+}
+
+size_t GetSwitchInstructionLength(BinaryNinja::BinaryView* view, uint64_t addr, const uint8_t* data, size_t len)
+{
+    if (!data || len < 2)
+        return 0;
+
+    size_t size = 2 + static_cast<size_t>(data[1]) * sizeof(SwitchCase);
+    if (!view)
+        return 2;
+
+    uint64_t codeEnd = GetCodeEnd(view);
+    if (addr + size <= addr || addr + size > codeEnd)
+        return 0;
+
+    return size;
+}
+
+uint64_t GetSwitchCaseTarget(uint64_t switchAddr, size_t index, const SwitchCase& switchCase)
+{
+    return static_cast<uint64_t>(static_cast<int64_t>(switchAddr) + switchCase.m_target +
+                                 static_cast<int64_t>((index + 1) * sizeof(SwitchCase) + 2));
+}
+
+std::optional<YSCSwitchInfo> DecodeSwitchInfo(BinaryNinja::BinaryView* view, uint64_t addr, const uint8_t* data,
+                                              size_t len)
+{
+    if (!view || !data || len < 2 || data[0] != OP_SWITCH)
+        return std::nullopt;
+
+    size_t instrLen = GetSwitchInstructionLength(view, addr, data, len);
+    if (instrLen == 0)
+        return std::nullopt;
+
+    uint8_t count = data[1];
+    std::vector<SwitchCase> cases(count);
+    size_t tableSize = cases.size() * sizeof(SwitchCase);
+    if (tableSize > 0 && view->Read(cases.data(), addr + 2, tableSize) != tableSize)
+        return std::nullopt;
+
+    YSCSwitchInfo switchInfo;
+    switchInfo.m_address = addr;
+    switchInfo.m_caseCount = count;
+    switchInfo.m_tableStart = addr + 2;
+    switchInfo.m_tableEnd = addr + instrLen;
+    switchInfo.m_cases.reserve(cases.size());
+
+    for (size_t i = 0; i < cases.size(); i++)
+        switchInfo.m_cases.push_back(YSCSwitchCaseInfo{cases[i].m_case, GetSwitchCaseTarget(addr, i, cases[i])});
+
+    return switchInfo;
+}
+
+struct YSCCodeIndex
+{
+    uint64_t codeStart = 0;
+    uint64_t codeEnd = 0;
+    std::unordered_set<uint64_t> instructionStarts;
+    std::set<uint64_t> functionStarts;
+};
+
+std::mutex g_codeIndexMutex;
+std::mutex g_codeIndexBuildMutex;
+std::unordered_map<uintptr_t, std::shared_ptr<YSCCodeIndex>> g_codeIndexCache;
+
+std::shared_ptr<YSCCodeIndex> GetYSCCodeIndex(BinaryNinja::BinaryView* view, size_t maxInstructionLength)
+{
+    uintptr_t key = GetYSCViewCacheKey(view);
+    if (key == 0 || IsYSCViewKeyRetired(key))
+        return nullptr;
+
+    {
+        std::lock_guard<std::mutex> guard(g_codeIndexMutex);
+        auto cached = g_codeIndexCache.find(key);
+        if (cached != g_codeIndexCache.end())
+            return cached->second;
+    }
+
+    std::lock_guard<std::mutex> buildGuard(g_codeIndexBuildMutex);
+    {
+        std::lock_guard<std::mutex> guard(g_codeIndexMutex);
+        auto cached = g_codeIndexCache.find(key);
+        if (cached != g_codeIndexCache.end())
+            return cached->second;
+    }
+
+    auto index = std::make_shared<YSCCodeIndex>();
+    auto code = view->GetSectionByName("CODE");
+    if (!code)
+        return index;
+
+    YSC_TRACE_SCOPE("ysc.arch", "GetYSCCodeIndex");
+    YSCTrace::InstantInt("ysc.arch", "codeIndexBuildViewKey", "key", static_cast<int64_t>(key));
+    YSCTrace::InstantInt("ysc.arch", "codeIndexBuildWrapper", "address",
+                         static_cast<int64_t>(reinterpret_cast<uintptr_t>(view)));
+    uint64_t firstDecodeFailure = 0;
+    index->codeStart = code->GetStart();
+    index->codeEnd = code->GetEnd();
+
+    std::vector<uint8_t> opcode(maxInstructionLength);
+    for (uint64_t cursor = index->codeStart; cursor < index->codeEnd && !view->AnalysisIsAborted();)
+    {
+        size_t maxLen = static_cast<size_t>(std::min<uint64_t>(maxInstructionLength, index->codeEnd - cursor));
+        size_t len = view->Read(opcode.data(), cursor, maxLen);
+        if (len < 1)
+            break;
+
+        size_t instrLen = GetRawInstructionLength(view, cursor, opcode.data(), len);
+        if (instrLen == 0 || instrLen > len || cursor + instrLen <= cursor || cursor + instrLen > index->codeEnd)
+        {
+            firstDecodeFailure = cursor;
+            break;
+        }
+
+        index->instructionStarts.insert(cursor);
+        if (opcode[0] == OP_ENTER)
+            index->functionStarts.insert(cursor);
+        cursor += instrLen;
+    }
+
+    YSCTrace::Counter("ysc.arch", "codeBytes", static_cast<int64_t>(index->codeEnd - index->codeStart));
+    YSCTrace::Counter("ysc.arch", "instructionStarts", static_cast<int64_t>(index->instructionStarts.size()));
+    YSCTrace::Counter("ysc.arch", "functionStarts", static_cast<int64_t>(index->functionStarts.size()));
+    if (firstDecodeFailure != 0)
+        YSCTrace::InstantInt("ysc.arch", "codeIndexDecodeFailure", "address", static_cast<int64_t>(firstDecodeFailure));
+    YSCTrace::MemorySnapshot("codeIndex.end.rssKb");
+    YSCTrace::FlushThrottled();
+
+    {
+        std::lock_guard<std::mutex> guard(g_codeIndexMutex);
+        auto cached = g_codeIndexCache.find(key);
+        if (cached != g_codeIndexCache.end())
+            return cached->second;
+        g_codeIndexCache[key] = index;
+    }
+    return index;
+}
+
+bool IsIndexedInstructionStart(const std::shared_ptr<YSCCodeIndex>& index, uint64_t addr)
+{
+    return index && addr >= index->codeStart && addr < index->codeEnd && index->instructionStarts.contains(addr);
+}
+
+bool IsIndexedFunctionStart(const std::shared_ptr<YSCCodeIndex>& index, uint64_t addr)
+{
+    return index && addr >= index->codeStart && addr < index->codeEnd && index->functionStarts.contains(addr);
+}
+
+bool YSCDiagnosticsEnabled()
+{
+    return YSCEnvEnabled("YSC_BINJA_DIAGNOSTICS");
+}
+
+bool YSCExtraInlinedCallChecksEnabled()
+{
+    return YSCEnvEnabled("YSC_BINJA_ENABLE_INLINED_CALL_CHECKS");
+}
+
+bool YSCTraceCallChecksEnabled()
+{
+    return YSCEnvEnabled("YSC_BINJA_TRACE_CALL_CHECKS");
+}
+
+bool YSCLargeScriptCallAnalysisEnabled()
+{
+    return YSCEnvEnabled("YSC_BINJA_ENABLE_LARGE_SCRIPT_CALL_ANALYSIS");
+}
+
+bool YSCLimitFunctionFanout(const std::shared_ptr<YSCCodeIndex>& index)
+{
+    if (!index || YSCLargeScriptCallAnalysisEnabled())
+        return false;
+    size_t limit = YSCEnvSize("YSC_BINJA_FUNCTION_ANALYSIS_LIMIT", YSC_FUNCTION_ANALYSIS_FANOUT_LIMIT);
+    return limit != 0 && index->functionStarts.size() > limit;
+}
+
+bool IsIndexedCodeAddress(const std::shared_ptr<YSCCodeIndex>& index, uint64_t addr)
+{
+    return index && addr >= index->codeStart && addr < index->codeEnd;
+}
+
+bool RegisterIndexedEnterFunction(BinaryNinja::BinaryView* view, const std::shared_ptr<YSCCodeIndex>& index, uint64_t addr)
+{
+    if (!view || !IsIndexedCodeAddress(index, addr))
+        return false;
+
+    auto enter = ReadEnterInfo(view, addr);
+    if (!enter || enter->m_paramCount > 16)
+        return false;
+
+    size_t enterLen = 5 + enter->m_nameLength;
+    if (enterLen == 0 || addr + enterLen <= addr || addr + enterLen > index->codeEnd)
+        return false;
+
+    std::lock_guard<std::mutex> guard(g_codeIndexMutex);
+    index->instructionStarts.insert(addr);
+    index->functionStarts.insert(addr);
+    return true;
+}
+
+std::unordered_set<uint64_t> DecodeFunctionInstructionStarts(BinaryNinja::BinaryView* view,
+                                                             const std::shared_ptr<YSCCodeIndex>& index,
+                                                             uint64_t functionStart, size_t maxInstructionLength)
+{
+    std::unordered_set<uint64_t> starts;
+    if (!view || !IsIndexedCodeAddress(index, functionStart))
+        return starts;
+
+    std::vector<uint8_t> opcode(maxInstructionLength);
+    for (uint64_t cursor = functionStart; cursor < index->codeEnd && !view->AnalysisIsAborted();)
+    {
+        size_t maxLen = static_cast<size_t>(std::min<uint64_t>(maxInstructionLength, index->codeEnd - cursor));
+        size_t len = view->Read(opcode.data(), cursor, maxLen);
+        if (len < 1)
+            break;
+        if (cursor != functionStart && opcode[0] == OP_ENTER)
+            break;
+
+        size_t instrLen = GetRawInstructionLength(view, cursor, opcode.data(), len);
+        if (instrLen == 0 || instrLen > len || cursor + instrLen <= cursor || cursor + instrLen > index->codeEnd)
+            break;
+
+        starts.insert(cursor);
+        cursor += instrLen;
+    }
+
+    if (!starts.empty())
+    {
+        std::lock_guard<std::mutex> guard(g_codeIndexMutex);
+        index->instructionStarts.insert(starts.begin(), starts.end());
+    }
+    return starts;
+}
+
+bool IsValidFunctionInstructionStart(const std::unordered_set<uint64_t>& functionInstructionStarts,
+                                     const std::shared_ptr<YSCCodeIndex>& index, uint64_t target,
+                                     uint64_t functionStart)
+{
+    if (!functionInstructionStarts.contains(target))
+        return false;
+    return !IsIndexedFunctionStart(index, target) || target == functionStart;
+}
+
+bool IsValidIntraFunctionTarget(const std::shared_ptr<YSCCodeIndex>& index, uint64_t target, uint64_t functionStart)
+{
+    if (!IsIndexedInstructionStart(index, target))
+        return false;
+    return !IsIndexedFunctionStart(index, target) || target == functionStart;
+}
+
+bool IsValidCallTarget(BinaryNinja::BinaryView* view, uint64_t target, size_t maxInstructionLength)
+{
+    auto index = GetYSCCodeIndex(view, maxInstructionLength);
+    return IsIndexedFunctionStart(index, target) || RegisterIndexedEnterFunction(view, index, target);
+}
+
+void AddBenignInstructionIL(BinaryNinja::LowLevelILFunction& il, uint8_t opcode)
+{
+    switch (opcode)
+    {
+    case OP_LEAVE:
+        il.AddInstruction(il.Return(il.ConstPointer(4, 0)));
+        break;
+    case OP_THROW:
+        il.AddInstruction(il.NoReturn());
+        break;
+    default:
+        il.AddInstruction(il.Nop());
+        break;
+    }
+}
 
 bool GetYSCStackEffect(BinaryNinja::BinaryView* view, uint64_t addr, const uint8_t* opcode, size_t len, int& delta,
                        bool& terminal)
@@ -362,6 +852,7 @@ bool GetYSCStackEffect(BinaryNinja::BinaryView* view, uint64_t addr, const uint8
     case OP_FSUB:
     case OP_FMUL:
     case OP_FDIV:
+    case OP_FMOD:
     case OP_FEQ:
     case OP_FNE:
     case OP_FGT:
@@ -371,11 +862,18 @@ bool GetYSCStackEffect(BinaryNinja::BinaryView* view, uint64_t addr, const uint8
     case OP_IOFFSET:
         delta = -1;
         return true;
+    case OP_VADD:
+    case OP_VSUB:
+    case OP_VMUL:
+    case OP_VDIV:
+        delta = -3;
+        return true;
     case OP_INEG:
     case OP_INOT:
     case OP_FNEG:
     case OP_I2F:
     case OP_F2I:
+    case OP_VNEG:
     case OP_IADD_U8:
     case OP_IMUL_U8:
     case OP_IADD_S16:
@@ -387,6 +885,12 @@ bool GetYSCStackEffect(BinaryNinja::BinaryView* view, uint64_t addr, const uint8
     case OP_LOAD:
     case OP_STRING:
     case OP_STRINGHASH:
+        return true;
+    case OP_F2V:
+        delta = 2;
+        return true;
+    case OP_CATCH:
+        delta = 1;
         return true;
     case OP_IOFFSET_U8_STORE:
     case OP_IOFFSET_S16_STORE:
@@ -425,6 +929,12 @@ bool GetYSCStackEffect(BinaryNinja::BinaryView* view, uint64_t addr, const uint8
     case OP_J:
         terminal = true;
         return true;
+    case OP_THROW:
+        terminal = true;
+        return true;
+    case OP_CALLINDIRECT:
+        delta = -1;
+        return true;
     case OP_LEAVE:
         if (len < 3)
             return false;
@@ -444,6 +954,8 @@ bool GetYSCStackEffect(BinaryNinja::BinaryView* view, uint64_t addr, const uint8
         if (!code)
             return false;
         uint64_t target = code->GetStart() + DecodeU24(opcode + 1);
+        if (!IsValidCallTarget(view, target, YSC_MAX_INTERNAL_INSTRUCTION_LENGTH))
+            return false;
         delta = static_cast<int>(FindFirstLeaveReturnCount(view, target)) - static_cast<int>(GetEnterParamCount(view, target));
         return true;
     }
@@ -624,6 +1136,7 @@ bool AnalyzeFunctionVMStack(BinaryNinja::BinaryView* view, const std::vector<Bin
                             size_t maxInstructionLength, std::map<uint64_t, size_t>& inputDepths, uint64_t entryAddress,
                             YSCLiftDiagnostic* diagnostic)
 {
+    YSC_TRACE_SCOPE_I("ysc.arch", "AnalyzeFunctionVMStack", "blocks", blocks.size());
     if (!view || blocks.empty())
     {
         if (diagnostic) diagnostic->reason = "no-view-or-blocks";
@@ -817,6 +1330,7 @@ bool IsSafeWholeFunctionLiftOpcode(uint8_t opcode)
     case OP_FSUB:
     case OP_FMUL:
     case OP_FDIV:
+    case OP_FMOD:
     case OP_FNEG:
     case OP_FEQ:
     case OP_FNE:
@@ -826,6 +1340,12 @@ bool IsSafeWholeFunctionLiftOpcode(uint8_t opcode)
     case OP_FLE:
     case OP_I2F:
     case OP_F2I:
+    case OP_F2V:
+    case OP_VADD:
+    case OP_VSUB:
+    case OP_VMUL:
+    case OP_VDIV:
+    case OP_VNEG:
     case OP_IADD_U8:
     case OP_IMUL_U8:
     case OP_IADD_S16:
@@ -884,6 +1404,9 @@ bool IsSafeWholeFunctionLiftOpcode(uint8_t opcode)
     case OP_ILE_JZ:
     case OP_SWITCH:
     case OP_LEAVE:
+    case OP_CATCH:
+    case OP_THROW:
+    case OP_CALLINDIRECT:
     case OP_TEXT_LABEL_ASSIGN_STRING:
     case OP_TEXT_LABEL_ASSIGN_INT:
     case OP_TEXT_LABEL_APPEND_STRING:
@@ -899,6 +1422,7 @@ bool CanUseWholeFunctionStackLifting(BinaryNinja::BinaryView* view,
                                      const std::vector<BinaryNinja::Ref<BinaryNinja::BasicBlock>>& blocks,
                                      size_t maxInstructionLength, YSCLiftDiagnostic* diagnostic)
 {
+    YSC_TRACE_SCOPE_I("ysc.arch", "CanUseWholeFunctionStackLifting", "blocks", blocks.size());
     if (!view || blocks.empty())
     {
         if (diagnostic) diagnostic->reason = "no-view-or-blocks";
@@ -1055,14 +1579,7 @@ size_t GetRawInstructionLength(BinaryNinja::BinaryView* view, uint64_t addr, con
         return size;
     }
     case OP_SWITCH:
-    {
-        if (len < 2)
-            return 0;
-        size_t size = 2 + static_cast<size_t>(data[1]) * sizeof(SwitchCase);
-        if (len < size)
-            return 0;
-        return size;
-    }
+        return GetSwitchInstructionLength(view, addr, data, len);
     default:
         if (data[0] >= OP_MAX)
             return 0;
@@ -1179,6 +1696,7 @@ class YSCSymbolicLifter
         case OP_FSUB: return Binary(len, &BinaryNinja::LowLevelILFunction::FloatSub);
         case OP_FMUL: return Binary(len, &BinaryNinja::LowLevelILFunction::FloatMult);
         case OP_FDIV: return Binary(len, &BinaryNinja::LowLevelILFunction::FloatDiv);
+        case OP_FMOD: return Fmod(len);
         case OP_FNEG: return Unary(len, &BinaryNinja::LowLevelILFunction::FloatNeg);
         case OP_FEQ: return Compare(len, &BinaryNinja::LowLevelILFunction::FloatCompareEqual);
         case OP_FNE: return Compare(len, &BinaryNinja::LowLevelILFunction::FloatCompareNotEqual);
@@ -1188,6 +1706,12 @@ class YSCSymbolicLifter
         case OP_FLE: return Compare(len, &BinaryNinja::LowLevelILFunction::FloatCompareLessEqual);
         case OP_I2F: return Unary(len, &BinaryNinja::LowLevelILFunction::IntToFloat);
         case OP_F2I: return Unary(len, &BinaryNinja::LowLevelILFunction::FloatToInt);
+        case OP_F2V: return F2V(len);
+        case OP_VADD: return VectorBinary(len, &BinaryNinja::LowLevelILFunction::FloatAdd);
+        case OP_VSUB: return VectorBinary(len, &BinaryNinja::LowLevelILFunction::FloatSub);
+        case OP_VMUL: return VectorBinary(len, &BinaryNinja::LowLevelILFunction::FloatMult);
+        case OP_VDIV: return VectorBinary(len, &BinaryNinja::LowLevelILFunction::FloatDiv);
+        case OP_VNEG: return VectorUnary(len, &BinaryNinja::LowLevelILFunction::FloatNeg);
         case OP_IADD_U8: if (len < 2) return false; return ImmBinary(len, data[0], &BinaryNinja::LowLevelILFunction::Add);
         case OP_IMUL_U8: if (len < 2) return false; return ImmBinary(len, data[0], &BinaryNinja::LowLevelILFunction::Mult);
         case OP_IADD_S16: if (len < 3) return false; return ImmBinary(len, static_cast<uint32_t>(ReadUnaligned<int16_t>(data)), &BinaryNinja::LowLevelILFunction::Add, 3);
@@ -1264,6 +1788,9 @@ class YSCSymbolicLifter
         case OP_NATIVE: return Native(opcode, addr, len);
         case OP_CALL: return Call(opcode, addr, len);
         case OP_LEAVE: return Leave(opcode, len);
+        case OP_CATCH: Push(m_il.Const(4, static_cast<uint32_t>(-1)), static_cast<uint32_t>(-1)); len = 1; return true;
+        case OP_THROW: m_il.AddInstruction(m_il.NoReturn()); len = 1; return true;
+        case OP_CALLINDIRECT: return CallIndirect(len);
         default:
             return false;
         }
@@ -1281,6 +1808,7 @@ class YSCSymbolicLifter
     {
         m_stack.clear();
         m_symbolic = true;
+        m_syntheticInputCount = 0;
         m_expectedOutgoingStackDepth.reset();
         m_expectedOutgoingBlockIndices.clear();
         m_expectedFallthroughBlockIndex.reset();
@@ -1313,8 +1841,14 @@ class YSCSymbolicLifter
         m_symbolic = true;
         m_currentBlockIndex = blockIndex;
         m_seededStackDepth = depth;
+        m_syntheticInputCount = static_cast<uint32_t>(depth);
         for (size_t i = 0; i < depth; i++)
             Push(m_il.Register(4, StackTemp(blockIndex, static_cast<uint32_t>(i))));
+    }
+
+    void SetValidInstructionStarts(std::unordered_set<uint64_t> instructionStarts)
+    {
+        m_validInstructionStarts = std::move(instructionStarts);
     }
 
     bool StoreStackOutputs(uint32_t targetBlockIndex, size_t expectedDepth)
@@ -1365,7 +1899,10 @@ class YSCSymbolicLifter
     bool Pop(Value& value)
     {
         if (m_stack.empty())
-            return false;
+        {
+            value = Value{m_il.Register(4, StackTemp(m_currentBlockIndex, m_syntheticInputCount++)), Kind::Expr, 0, 0, std::nullopt, std::nullopt};
+            return true;
+        }
         value = m_stack.back();
         m_stack.pop_back();
         return true;
@@ -1373,7 +1910,12 @@ class YSCSymbolicLifter
 
     bool Dup(size_t& len)
     {
-        if (m_stack.empty()) return false;
+        if (m_stack.empty())
+        {
+            Value value;
+            Pop(value);
+            m_stack.push_back(value);
+        }
         m_stack.push_back(m_stack.back()); len = 1; return true;
     }
     bool Drop(size_t& len)
@@ -1424,6 +1966,48 @@ class YSCSymbolicLifter
     {
         Value rhs, lhs; if (!Pop(rhs) || !Pop(lhs)) return false;
         Push((m_il.*op)(4, lhs.expr, rhs.expr, {})); len = 1; return true;
+    }
+    bool Fmod(size_t& len)
+    {
+        Value divisor, dividend;
+        if (!Pop(divisor) || !Pop(dividend)) return false;
+        auto quotient = m_il.FloatDiv(4, dividend.expr, divisor.expr);
+        auto truncatedQuotient = m_il.FloatToInt(4, quotient);
+        auto floatTruncatedQuotient = m_il.IntToFloat(4, truncatedQuotient);
+        auto product = m_il.FloatMult(4, floatTruncatedQuotient, divisor.expr);
+        Push(m_il.FloatSub(4, dividend.expr, product));
+        len = 1;
+        return true;
+    }
+    bool F2V(size_t& len)
+    {
+        Value value;
+        if (!Pop(value)) return false;
+        Push(value.expr);
+        Push(value.expr);
+        Push(value.expr);
+        len = 1;
+        return true;
+    }
+    bool VectorBinary(size_t& len, BinaryOp op)
+    {
+        Value z1, y1, x1, z2, y2, x2;
+        if (!Pop(z1) || !Pop(y1) || !Pop(x1) || !Pop(z2) || !Pop(y2) || !Pop(x2)) return false;
+        Push((m_il.*op)(4, x2.expr, x1.expr, 0, {}));
+        Push((m_il.*op)(4, y2.expr, y1.expr, 0, {}));
+        Push((m_il.*op)(4, z2.expr, z1.expr, 0, {}));
+        len = 1;
+        return true;
+    }
+    bool VectorUnary(size_t& len, UnaryOp op)
+    {
+        Value z, y, x;
+        if (!Pop(z) || !Pop(y) || !Pop(x)) return false;
+        Push((m_il.*op)(4, x.expr, 0, {}));
+        Push((m_il.*op)(4, y.expr, 0, {}));
+        Push((m_il.*op)(4, z.expr, 0, {}));
+        len = 1;
+        return true;
     }
     bool StoreLocal(uint32_t index, size_t& len, size_t insnLen)
     {
@@ -1668,6 +2252,7 @@ class YSCSymbolicLifter
     bool Jump(const uint8_t* opcode, uint64_t addr, size_t& len)
     {
         if (len < 3) return false;
+        if (!IsValidBranchTarget(BranchTarget(addr, opcode))) return false;
         if (m_expectedOutgoingStackDepth && !StoreStackOutputs(*m_expectedOutgoingStackDepth)) return false;
         EmitGoto(BranchTarget(addr, opcode)); len = 3; return true;
     }
@@ -1676,6 +2261,7 @@ class YSCSymbolicLifter
         Value cond; if (len < 3 || !Pop(cond)) return false;
         uint64_t branchTarget = BranchTarget(addr, opcode);
         uint64_t fallthroughTarget = addr + 3;
+        if (!IsValidBranchTarget(branchTarget) || !IsValidBranchTarget(fallthroughTarget)) return false;
         if (branchTarget == fallthroughTarget)
         {
             if (m_expectedOutgoingStackDepth)
@@ -1728,6 +2314,7 @@ class YSCSymbolicLifter
         auto cond = (m_il.*op)(4, lhs.expr, rhs.expr, {});
         uint64_t branchTarget = BranchTarget(addr, opcode);
         uint64_t fallthroughTarget = addr + 3;
+        if (!IsValidBranchTarget(branchTarget) || !IsValidBranchTarget(fallthroughTarget)) return false;
         if (branchTarget == fallthroughTarget)
         {
             if (m_expectedOutgoingStackDepth)
@@ -1761,22 +2348,36 @@ class YSCSymbolicLifter
         if (len < 2) return false;
         Value selector; if (!Pop(selector)) return false;
         if (m_expectedOutgoingStackDepth && !StoreStackOutputs(*m_expectedOutgoingStackDepth)) return false;
-        uint8_t count = opcode[1];
-        std::vector<SwitchCase> cases(count);
-        if (!m_view || m_view->Read(cases.data(), addr + 2, cases.size() * sizeof(SwitchCase)) < cases.size() * sizeof(SwitchCase))
+
+        auto decodedSwitch = DecodeSwitchInfo(m_view, addr, opcode, len);
+        if (!decodedSwitch)
             return false;
 
-        std::vector<BinaryNinja::LowLevelILLabel> falseLabels(count);
-        for (size_t i = 0; i < cases.size(); i++)
+        for (const auto& switchCase : decodedSwitch->m_cases)
+            if (!IsValidBranchTarget(switchCase.m_target))
+                return false;
+        if (!IsValidBranchTarget(decodedSwitch->m_tableEnd))
+            return false;
+
+        std::vector<BinaryNinja::ArchAndAddr> indirectBranches;
+        indirectBranches.reserve(decodedSwitch->m_cases.size() + 1);
+        for (const auto& switchCase : decodedSwitch->m_cases)
+            indirectBranches.emplace_back(m_arch, switchCase.m_target);
+        indirectBranches.emplace_back(m_arch, decodedSwitch->m_tableEnd);
+        m_il.SetIndirectBranches(indirectBranches);
+
+        std::vector<BinaryNinja::LowLevelILLabel> falseLabels(decodedSwitch->m_cases.size());
+        for (size_t i = 0; i < decodedSwitch->m_cases.size(); i++)
         {
+            const auto& switchCase = decodedSwitch->m_cases[i];
             BinaryNinja::LowLevelILLabel trueLabel;
-            m_il.AddInstruction(m_il.If(m_il.CompareEqual(4, selector.expr, m_il.Const(4, cases[i].m_case)), trueLabel, falseLabels[i]));
+            m_il.AddInstruction(m_il.If(m_il.CompareEqual(4, selector.expr, m_il.Const(4, switchCase.m_case)), trueLabel, falseLabels[i]));
             m_il.MarkLabel(trueLabel);
-            EmitGoto(static_cast<uint64_t>(static_cast<int64_t>(addr) + cases[i].m_target + static_cast<int64_t>((i + 1) * 6 + 2)));
+            EmitGoto(switchCase.m_target);
             m_il.MarkLabel(falseLabels[i]);
         }
-        EmitGoto(addr + 2 + cases.size() * sizeof(SwitchCase));
-        len = 2 + cases.size() * sizeof(SwitchCase);
+        EmitGoto(decodedSwitch->m_tableEnd);
+        len = decodedSwitch->m_tableEnd - addr;
         return true;
     }
     bool Native(const uint8_t* opcode, uint64_t addr, size_t& len)
@@ -1818,6 +2419,7 @@ class YSCSymbolicLifter
         auto code = m_view ? m_view->GetSectionByName("CODE") : nullptr;
         if (!code) return false;
         uint64_t target = code->GetStart() + DecodeU24(opcode + 1);
+        if (!IsValidCallTarget(m_view, target, YSC_MAX_INTERNAL_INSTRUCTION_LENGTH)) return false;
         uint8_t paramCount = GetEnterParamCount(m_view, target);
         uint8_t retCount = FindFirstLeaveReturnCount(m_view, target);
         if (paramCount > 16)
@@ -1835,6 +2437,14 @@ class YSCSymbolicLifter
             Push(m_il.Register(4, resultTemp));
         }
         len = 4;
+        return true;
+    }
+    bool CallIndirect(size_t& len)
+    {
+        Value target;
+        if (!Pop(target)) return false;
+        m_il.AddInstruction(m_il.Call(target.expr));
+        len = 1;
         return true;
     }
     bool Leave(const uint8_t* opcode, size_t& len)
@@ -1873,6 +2483,12 @@ class YSCSymbolicLifter
         else
             m_il.AddInstruction(m_il.Jump(m_il.ConstPointer(4, target)));
     }
+    bool IsValidBranchTarget(uint64_t target)
+    {
+        if (!m_validInstructionStarts.empty())
+            return m_validInstructionStarts.contains(target);
+        return IsIndexedInstructionStart(GetYSCCodeIndex(m_view, YSC_MAX_INTERNAL_INSTRUCTION_LENGTH), target);
+    }
     void EmitJz(BinaryNinja::ExprId cond, uint64_t falseTarget, std::optional<uint64_t> trueTarget = std::nullopt)
     {
         BinaryNinja::LowLevelILLabel trueLabel;
@@ -1901,7 +2517,10 @@ class YSCSymbolicLifter
     uint64_t StaticAddress(uint32_t operand)
     {
         auto section = m_view ? m_view->GetSectionByName("STATICS") : nullptr;
-        return (section ? section->GetStart() : 0) + operand * 4;
+        uint64_t address = (section ? section->GetStart() : 0) + operand * 4;
+        if (section && m_view && address >= section->GetStart() && address < section->GetEnd())
+            DefineAutoInt32DataSymbol(m_view, address, fmt::format("Local_{}", operand));
+        return address;
     }
     uint64_t GlobalAddress(uint32_t operand)
     {
@@ -1910,29 +2529,26 @@ class YSCSymbolicLifter
         uint32_t needle = operand & 0x3ffff;
         uint64_t address = (section ? section->GetStart() : 0) + (static_cast<uint64_t>(block) * (1 << 18) + needle) * 4;
         if (m_view)
-        {
-            m_view->DefineDataVariable(address, VolatileInt32Type());
-            m_view->DefineAutoSymbol(new BinaryNinja::Symbol(BNSymbolType::DataSymbol, fmt::format("Global_{}", operand), address));
-        }
+            DefineAutoInt32DataSymbol(m_view, address, fmt::format("Global_{}", operand));
         return address;
     }
 
     void DefineRuntimeDataAddress(uint64_t address)
     {
-        if (!m_view)
+        if (!YSC_ENABLE_RUNTIME_ARRAY_METADATA || !m_view)
             return;
         auto globals = m_view->GetSectionByName("GLOBALS");
         if (globals && address >= globals->GetStart() && address < globals->GetEnd())
         {
             uint64_t index = (address - globals->GetStart()) / 4;
-            m_view->DefineDataVariable(address, VolatileInt32Type());
-            m_view->DefineAutoSymbol(new BinaryNinja::Symbol(BNSymbolType::DataSymbol, fmt::format("Global_{}", index), address));
+            DefineAutoInt32DataSymbol(m_view, address, fmt::format("Global_{}", index));
         }
     }
 
     inline static std::mutex g_runtimeArrayShapeMutex;
     inline static std::set<uint64_t> g_definedRuntimeArrayBases;
     inline static std::set<uint64_t> g_definedRuntimeArrayOffsetAliases;
+    inline static std::map<uint64_t, size_t> g_runtimeArrayOffsetAliasCounts;
 
     uint64_t RuntimeArrayKey(uint64_t dataAddress, uint32_t stride) const
     {
@@ -1941,6 +2557,8 @@ class YSCSymbolicLifter
 
     void DefineRuntimeArrayDataAddress(uint64_t headerAddress, uint64_t dataAddress, uint32_t stride)
     {
+        if (!YSC_ENABLE_RUNTIME_ARRAY_METADATA)
+            return;
         std::lock_guard<std::mutex> guard(g_runtimeArrayShapeMutex);
         DefineRuntimeArrayDataAddressLocked(headerAddress, dataAddress, stride);
     }
@@ -1972,18 +2590,14 @@ class YSCSymbolicLifter
             return;
 
         uint64_t headerIndex = (headerAddress - section->GetStart()) / 4;
-        m_view->DefineDataVariable(dataAddress, VolatileInt32Type());
-        m_view->DefineAutoSymbol(new BinaryNinja::Symbol(BNSymbolType::DataSymbol, fmt::format("{}_{}_data", prefix, headerIndex), dataAddress));
+        DefineAutoInt32DataSymbol(m_view, dataAddress, fmt::format("{}_{}_data", prefix, headerIndex));
     }
 
     void DefineRuntimeArrayOffsetAlias(uint64_t dataAddress, int64_t offsetBytes)
     {
-        if (!m_view || offsetBytes < 0 || offsetBytes > 0x100000)
+        if (!YSC_ENABLE_RUNTIME_ARRAY_METADATA || !m_view || offsetBytes < 0 || offsetBytes > 0x100)
             return;
         uint64_t aliasAddress = dataAddress + static_cast<uint64_t>(offsetBytes);
-        std::lock_guard<std::mutex> guard(g_runtimeArrayShapeMutex);
-        if (!g_definedRuntimeArrayOffsetAliases.insert(aliasAddress).second)
-            return;
 
         auto globals = m_view->GetSectionByName("GLOBALS");
         auto statics = m_view->GetSectionByName("STATICS");
@@ -2002,11 +2616,17 @@ class YSCSymbolicLifter
         if (!section || aliasAddress >= section->GetEnd())
             return;
 
+        std::lock_guard<std::mutex> guard(g_runtimeArrayShapeMutex);
+        auto& aliasCount = g_runtimeArrayOffsetAliasCounts[dataAddress];
+        if (aliasCount >= YSC_MAX_RUNTIME_ARRAY_OFFSET_ALIASES_PER_BASE)
+            return;
+        if (!g_definedRuntimeArrayOffsetAliases.insert(aliasAddress).second)
+            return;
+        aliasCount++;
         uint64_t dataIndex = (dataAddress - section->GetStart()) / 4;
         uint64_t headerIndex = dataIndex > 0 ? dataIndex - 1 : dataIndex;
-        m_view->DefineDataVariable(aliasAddress, VolatileInt32Type());
-        m_view->DefineAutoSymbol(new BinaryNinja::Symbol(
-            BNSymbolType::DataSymbol, fmt::format("{}_{}_data_plus_{:x}", prefix, headerIndex, static_cast<uint64_t>(offsetBytes)), aliasAddress));
+        DefineAutoInt32DataSymbol(m_view, aliasAddress,
+            fmt::format("{}_{}_data_plus_{:x}", prefix, headerIndex, static_cast<uint64_t>(offsetBytes)));
     }
 
     YSCArchitecture* m_arch;
@@ -2016,12 +2636,41 @@ class YSCSymbolicLifter
     bool m_symbolic = true;
     uint32_t m_currentBlockIndex = 0;
     size_t m_seededStackDepth = 0;
+    uint32_t m_syntheticInputCount = 0;
+    std::unordered_set<uint64_t> m_validInstructionStarts;
     std::optional<size_t> m_expectedOutgoingStackDepth;
     std::vector<uint32_t> m_expectedOutgoingBlockIndices;
     std::optional<uint32_t> m_expectedFallthroughBlockIndex;
     std::optional<uint32_t> m_expectedBranchBlockIndex;
     bool m_explicitFallthroughGoto = false;
 };
+}
+
+uintptr_t MarkYSCArchitectureViewActive(BinaryNinja::BinaryView* view)
+{
+    uintptr_t key = GetYSCViewCacheKey(view);
+    if (key == 0)
+        return 0;
+
+    {
+        std::lock_guard<std::mutex> guard(g_viewLifetimeMutex);
+        g_retiredViewKeys.erase(key);
+    }
+    YSCTrace::InstantInt("ysc.view", "YSC view active", "key", static_cast<int64_t>(key));
+    return key;
+}
+
+void RetireYSCArchitectureView(uintptr_t key)
+{
+    if (key == 0)
+        return;
+
+    {
+        std::lock_guard<std::mutex> guard(g_viewLifetimeMutex);
+        g_retiredViewKeys.insert(key);
+    }
+    YSCTrace::InstantInt("ysc.view", "YSC view retired", "key", static_cast<int64_t>(key));
+    YSCTrace::FlushThrottled();
 }
 
 std::string YSCArchitecture::GetRegisterName(uint32_t reg)
@@ -2076,9 +2725,8 @@ bool YSCArchitecture::GetInstructionLowLevelIL(const uint8_t* data, uint64_t add
     if (instrLen == 0 || len < instrLen)
         return false;
 
-    m_insns[insn]->GetInstructionLowLevelIL(data + 1, addr, len, il);
-    if (!m_insns[insn]->CustomLLILSize())
-        len = instrLen;
+    AddBenignInstructionIL(il, insn);
+    len = instrLen;
     return true;
 }
 
@@ -2164,9 +2812,8 @@ YSCBlockAnalysisContext::YSCBlockAnalysisContext(BinaryNinja::Function* function
                                                  BinaryNinja::BasicBlockAnalysisContext* ctx)
     : m_function(function), m_ctx(ctx)
 {
-    m_functionContext = new YSCFunctionContext();
+    m_functionContext = std::make_unique<YSCFunctionContext>();
     m_functionContext->m_start = function->GetStart();
-    ctx->SetFunctionArchContextRaw(m_functionContext);
     m_blocksToProcess.push(function->GetStart());
     m_processingBlocks.insert(function->GetStart());
 }
@@ -2176,10 +2823,22 @@ YSCBlockAnalysisContext::YSCBlockAnalysisContext(BinaryNinja::Function* function
  */
 void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, BinaryNinja::BasicBlockAnalysisContext& ctx)
 {
+    YSC_TRACE_SCOPE("ysc.arch", "AnalyzeBasicBlocks");
     YSCBlockAnalysisContext analysisCtx(function, &ctx);
-    if (!analysisCtx.IsFirstInstructionEnter())
+    auto view = analysisCtx.GetView();
+    if (!view || IsYSCArchitectureViewRetired(view) || view->AnalysisIsAborted())
     {
-        auto view = analysisCtx.GetView();
+        YSCTrace::Instant("ysc.arch", "AnalyzeBasicBlocks skipped retired view");
+        ctx.Finalize();
+        return;
+    }
+
+    auto codeIndex = GetYSCCodeIndex(view, YSC_MAX_INTERNAL_INSTRUCTION_LENGTH);
+    bool limitFunctionFanout = YSCLimitFunctionFanout(codeIndex);
+
+    if (!IsIndexedFunctionStart(codeIndex, function->GetStart()) &&
+        !RegisterIndexedEnterFunction(view, codeIndex, function->GetStart()))
+    {
         uint64_t start = function->GetStart();
         uint8_t byte = 0;
         view->Read(&byte, start, 1);
@@ -2193,13 +2852,30 @@ void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, Binary
         return;
     }
 
-    auto view = analysisCtx.GetView();
+    size_t invalidBlockCount = 0;
+    size_t createdBlockCount = 0;
+    size_t queuedEdgeCount = 0;
     uint64_t totalSize = 0;
     uint64_t maxSize = ctx.GetMaxFunctionSize();
     bool maxSizeReached = false;
+    const uint64_t functionStart = function->GetStart();
+    auto functionInstructionStarts = DecodeFunctionInstructionStarts(view, codeIndex, functionStart, YSC_MAX_INTERNAL_INSTRUCTION_LENGTH);
+
+    auto addBranchTarget = [&](BinaryNinja::Ref<BinaryNinja::BasicBlock>& block, BNBranchType type, uint64_t target,
+                               bool fallThrough = false) -> bool {
+        if (!IsValidFunctionInstructionStart(functionInstructionStarts, codeIndex, target, functionStart))
+            return false;
+        block->AddPendingOutgoingEdge(type, target, nullptr, fallThrough);
+        analysisCtx.QueueAddress(target);
+        queuedEdgeCount++;
+        return true;
+    };
 
     while (analysisCtx.IsProcessing())
     {
+        if (IsYSCArchitectureViewRetired(view) || view->AnalysisIsAborted())
+            break;
+
         uint64_t currentAddr = analysisCtx.PopNextBlock();
 
         // Skip if this block has already been processed
@@ -2216,11 +2892,15 @@ void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, Binary
 
         while (true)
         {
-            uint8_t opcode[BN_MAX_INSTRUCTION_LENGTH] = {};
-            size_t maxLen = view->Read(opcode, currentAddr, GetMaxInstructionLength());
+            if (currentAddr != blockStartAddr && IsIndexedFunctionStart(codeIndex, currentAddr))
+                break;
+
+            std::vector<uint8_t> opcode(YSC_MAX_INTERNAL_INSTRUCTION_LENGTH);
+            size_t maxLen = view->Read(opcode.data(), currentAddr, opcode.size());
             if (maxLen < 1)
             {
                 block->SetHasInvalidInstructions(true);
+                invalidBlockCount++;
                 break;
             }
 
@@ -2228,68 +2908,152 @@ void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, Binary
             if (insn >= OP_MAX)
             {
                 block->SetHasInvalidInstructions(true);
+                invalidBlockCount++;
                 break;
             }
 
-            size_t instrLen = GetRawInstructionLength(view, currentAddr, opcode, maxLen);
+            size_t instrLen = GetRawInstructionLength(view, currentAddr, opcode.data(), maxLen);
             if (instrLen == 0 || instrLen > maxLen)
             {
                 block->SetHasInvalidInstructions(true);
+                invalidBlockCount++;
                 break;
             }
+
+            if (!functionInstructionStarts.contains(currentAddr))
+            {
+                block->SetHasInvalidInstructions(true);
+                invalidBlockCount++;
+                break;
+            }
+
             BinaryNinja::InstructionInfo info;
-            if (GetInstructionInfo(opcode, currentAddr, maxLen, info))
+            bool endsBlock = false;
+            switch (insn)
             {
-                for (size_t i = 0; i < info.branchCount; i++)
+            case OP_ENTER:
+                if (auto enter = ReadEnterInfo(view, currentAddr))
+                    analysisCtx.RecordEnter(*enter);
+                break;
+            case OP_CALL:
+            {
+                auto code = view ? view->GetSectionByName("CODE") : nullptr;
+                if (!limitFunctionFanout && code && instrLen >= 4)
                 {
-                    if (info.branchType[i] != BNBranchType::CallDestination)
-                        continue;
-
-                    uint64_t target = info.branchTarget[i];
-                    ctx.GetDirectCodeReferences()[target].emplace(function->GetArchitecture(), currentAddr);
-                    if (view->IsOffsetExternSemantics(target))
-                        continue;
-
-                    if (!view->IsValidOffset(target) || !view->IsOffsetBackedByFile(target))
-                        continue;
-                    if (!IsEnterAt(view, target))
-                        continue;
-
-                    auto platform = function->GetPlatform();
-                    auto callee = view->AddFunctionForAnalysis(platform, target, true);
-                    if (callee)
-                        ctx.AddTempOutgoingReference(callee);
+                    uint64_t target = code->GetStart() + DecodeU24(opcode.data() + 1);
+                    if (IsValidCallTarget(view, target, YSC_MAX_INTERNAL_INSTRUCTION_LENGTH))
+                    {
+                        ctx.GetDirectCodeReferences()[target].emplace(function->GetArchitecture(), currentAddr);
+                    }
                 }
+                break;
+            }
+            case OP_J:
+            {
+                uint64_t target = BranchTarget(currentAddr, opcode.data());
+                if (!addBranchTarget(block, BNBranchType::UnconditionalBranch, target))
+                {
+                    block->SetHasInvalidInstructions(true);
+                    invalidBlockCount++;
+                }
+                endsBlock = true;
+                break;
+            }
+            case OP_JZ:
+            case OP_IEQ_JZ:
+            case OP_INE_JZ:
+            case OP_IGT_JZ:
+            case OP_IGE_JZ:
+            case OP_ILT_JZ:
+            case OP_ILE_JZ:
+            {
+                uint64_t fallthrough = currentAddr + instrLen;
+                uint64_t target = BranchTarget(currentAddr, opcode.data());
+                bool validFallthrough = addBranchTarget(block, BNBranchType::TrueBranch, fallthrough, true);
+                bool validBranch = addBranchTarget(block, BNBranchType::FalseBranch, target);
+                if (!validFallthrough || !validBranch)
+                {
+                    block->SetHasInvalidInstructions(true);
+                    invalidBlockCount++;
+                }
+                endsBlock = true;
+                break;
+            }
+            case OP_SWITCH:
+            {
+                auto decodedSwitch = DecodeSwitchInfo(view, currentAddr, opcode.data(), maxLen);
+                if (!decodedSwitch)
+                {
+                    block->SetHasInvalidInstructions(true);
+                    invalidBlockCount++;
+                    endsBlock = true;
+                    break;
+                }
+
+                YSCSwitchInfo switchInfo = *decodedSwitch;
+                switchInfo.m_cases.clear();
+                for (const auto& switchCase : decodedSwitch->m_cases)
+                {
+                    if (addBranchTarget(block, BNBranchType::IndirectBranch, switchCase.m_target))
+                        switchInfo.m_cases.push_back(switchCase);
+                    else
+                    {
+                        block->SetHasInvalidInstructions(true);
+                        invalidBlockCount++;
+                    }
+                }
+
+                if (!addBranchTarget(block, BNBranchType::IndirectBranch, switchInfo.m_tableEnd, true))
+                {
+                    block->SetHasInvalidInstructions(true);
+                    invalidBlockCount++;
+                }
+
+                analysisCtx.RecordSwitch(switchInfo);
+                endsBlock = true;
+                break;
+            }
+            case OP_LEAVE:
+                if (instrLen >= 3)
+                    analysisCtx.RecordReturnCount(opcode[2]);
+                endsBlock = true;
+                break;
+            case OP_THROW:
+                endsBlock = true;
+                break;
+            default:
+                if (GetInstructionInfo(opcode.data(), currentAddr, maxLen, info))
+                {
+                    for (size_t i = 0; i < info.branchCount; i++)
+                    {
+                        if (info.branchType[i] == BNBranchType::CallDestination)
+                            continue;
+                        if (!IsValidFunctionInstructionStart(functionInstructionStarts, codeIndex, info.branchTarget[i], functionStart))
+                        {
+                            block->SetHasInvalidInstructions(true);
+                            invalidBlockCount++;
+                        }
+                    }
+                }
+                break;
             }
 
-            size_t bytesRead = 0;
-            bool endsBlock = m_insns[insn]->GetInstructionBlockAnalysis(analysisCtx, currentAddr, bytesRead);
-            if (endsBlock && insn == OP_LEAVE && instrLen >= 3)
-                analysisCtx.RecordReturnCount(opcode[2]);
-            if (bytesRead == 0)
-            {
-                analysisCtx.AddCurrentInstructionData(opcode, instrLen);
-                bytesRead = instrLen;
-            }
-            else if (bytesRead != instrLen)
-            {
-                // Some legacy per-op block analyzers still use fixed GetSize() values
-                // for variable-size instructions or have operand-offset bugs. Basic
-                // block boundaries must be based on the canonical raw decoder so the
-                // new whole-function lifter receives non-overlapping instruction ranges.
-                bytesRead = instrLen;
-            }
+            size_t bytesRead = instrLen;
+            size_t instructionDataLen = insn == OP_SWITCH ? std::min<size_t>(maxLen, 2) : instrLen;
+            analysisCtx.AddCurrentInstructionData(opcode.data(), instructionDataLen);
 
             if (bytesRead == 0)
             {
                 // If no bytes were read, something went wrong - end the block
                 block->SetHasInvalidInstructions(true);
+                invalidBlockCount++;
                 break;
             }
 
             if (currentAddr + bytesRead < currentAddr || currentAddr + bytesRead > view->GetEnd()) // overflow check
             {
                 block->SetHasInvalidInstructions(true);
+                invalidBlockCount++;
                 break;
             }
 
@@ -2313,8 +3077,11 @@ void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, Binary
             if (!endsBlock && currentAddr != blockStartAddr &&
                 (analysisCtx.IsBlockProcessing(currentAddr) || analysisCtx.HasSeenBlock(currentAddr)))
             {
-                endsBlock = true;
-                block->AddPendingOutgoingEdge(BNBranchType::UnconditionalBranch, currentAddr, nullptr, true);
+                if (IsValidFunctionInstructionStart(functionInstructionStarts, codeIndex, currentAddr, functionStart))
+                {
+                    endsBlock = true;
+                    block->AddPendingOutgoingEdge(BNBranchType::UnconditionalBranch, currentAddr, nullptr, true);
+                }
             }
 
             if (endsBlock)
@@ -2326,6 +3093,7 @@ void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, Binary
         {
             block->SetEnd(currentAddr);
             ctx.AddFunctionBasicBlock(block);
+            createdBlockCount++;
         }
 
         analysisCtx.MarkBlockAsProcessed(blockStartAddr);
@@ -2339,13 +3107,31 @@ void YSCArchitecture::AnalyzeBasicBlocks(BinaryNinja::Function* function, Binary
 
     ApplyYSCFunctionType(function, view, analysisCtx.GetFunctionContext()->m_enter,
                          analysisCtx.GetFunctionContext()->m_returnCount);
+    (void) invalidBlockCount;
+    YSCTrace::Counter("ysc.arch", "analyzeBlocks.createdBlocks", static_cast<int64_t>(createdBlockCount));
+    YSCTrace::Counter("ysc.arch", "analyzeBlocks.queuedEdges", static_cast<int64_t>(queuedEdgeCount));
+    YSCTrace::Counter("ysc.arch", "analyzeBlocks.invalidBlocks", static_cast<int64_t>(invalidBlockCount));
+    YSCTrace::Counter("ysc.arch", "analyzeBlocks.totalBytes", static_cast<int64_t>(totalSize));
+    YSCTrace::Counter("ysc.arch", "analyzeBlocks.functionInstructionStarts",
+                      static_cast<int64_t>(functionInstructionStarts.size()));
+    YSCTrace::Counter("ysc.arch", "analyzeBlocks.callFanoutLimited", limitFunctionFanout ? 1 : 0);
+    YSCTrace::MemorySnapshot("analyzeBlocks.end.rssKb");
+    YSCTrace::FlushThrottled();
     ctx.Finalize();
 }
 
 bool YSCArchitecture::LiftFunction(BinaryNinja::LowLevelILFunction* function,
                                    BinaryNinja::FunctionLifterContext& context)
 {
+    YSC_TRACE_SCOPE("ysc.arch", "LiftFunction");
     auto view = context.GetView();
+    if (!view || IsYSCArchitectureViewRetired(view) || view->AnalysisIsAborted())
+    {
+        YSCTrace::Instant("ysc.arch", "LiftFunction skipped retired view");
+        function->Finalize();
+        return true;
+    }
+
     auto blocks = context.GetBasicBlocks();
     YSCSymbolicLifter symbolicLifter(this, *function, view);
     std::map<uint64_t, size_t> vmInputDepths;
@@ -2362,23 +3148,64 @@ bool YSCArchitecture::LiftFunction(BinaryNinja::LowLevelILFunction* function,
     auto owner = function->GetFunction();
     uint64_t functionStart = owner ? owner->GetStart() : (blocks.empty() ? 0 : blocks.front()->GetStart());
     bool startsWithEnter = IsEnterAt(view, functionStart);
-    bool canWholeFunctionLift = CanUseWholeFunctionStackLifting(view, blocks, GetMaxInstructionLength(), &canDiagnostic);
+    auto liftCodeIndex = GetYSCCodeIndex(view, YSC_MAX_INTERNAL_INSTRUCTION_LENGTH);
+    if (!IsIndexedFunctionStart(liftCodeIndex, functionStart) &&
+        !RegisterIndexedEnterFunction(view, liftCodeIndex, functionStart))
+    {
+        if (blocks.empty())
+        {
+            function->Finalize();
+            return true;
+        }
+
+        auto block = blocks.front();
+        function->SetCurrentSourceBlock(block);
+        context.PrepareBlockTranslation(function, block->GetArchitecture(), block->GetStart());
+        function->SetCurrentAddress(block->GetArchitecture(), block->GetStart());
+        if (auto label = function->GetLabelForAddress(block->GetArchitecture(), block->GetStart()))
+            function->MarkLabel(*label);
+        function->AddInstruction(function->NoReturn());
+        function->Finalize();
+        return true;
+    }
+    std::unordered_set<uint64_t> functionInstructionStarts;
+    bool limitFunctionFanout = YSCLimitFunctionFanout(liftCodeIndex);
+    for (auto& block : blocks)
+    {
+        if (block->GetArchitecture() != this)
+            continue;
+        for (uint64_t addr = block->GetStart(); addr < block->GetEnd();)
+        {
+            std::vector<uint8_t> opcode(YSC_MAX_INTERNAL_INSTRUCTION_LENGTH);
+            size_t len = view->Read(opcode.data(), addr, opcode.size());
+            size_t instrLen = GetRawInstructionLength(view, addr, opcode.data(), len);
+            if (len == 0 || instrLen == 0 || addr + instrLen <= addr)
+                break;
+            functionInstructionStarts.insert(addr);
+            addr += instrLen;
+        }
+    }
+    symbolicLifter.SetValidInstructionStarts(functionInstructionStarts);
+    bool canWholeFunctionLift = CanUseWholeFunctionStackLifting(view, blocks, YSC_MAX_INTERNAL_INSTRUCTION_LENGTH, &canDiagnostic);
     if (!startsWithEnter && canWholeFunctionLift)
     {
         canDiagnostic.reason = "non-enter-function";
         canDiagnostic.address = functionStart;
         canWholeFunctionLift = false;
     }
-    bool stackAnalysisOk = canWholeFunctionLift && AnalyzeFunctionVMStack(view, blocks, GetMaxInstructionLength(), vmInputDepths, functionStart, &stackDiagnostic);
+    bool stackAnalysisOk = canWholeFunctionLift &&
+        AnalyzeFunctionVMStack(view, blocks, YSC_MAX_INTERNAL_INSTRUCTION_LENGTH, vmInputDepths, functionStart, &stackDiagnostic);
     bool useFunctionLevelStackLifting = canWholeFunctionLift && stackAnalysisOk;
-    if (useFunctionLevelStackLifting && blocks.size() >= 16)
+    YSCTrace::Counter("ysc.arch", "lift.blocks", static_cast<int64_t>(blocks.size()));
+    YSCTrace::Counter("ysc.arch", "lift.useFunctionLevelStackLifting", useFunctionLevelStackLifting ? 1 : 0);
+    if (YSCDiagnosticsEnabled() && useFunctionLevelStackLifting && blocks.size() >= 16)
     {
         std::string functionName = owner && owner->GetSymbol() ? owner->GetSymbol()->GetShortName() : "<unknown>";
         BinaryNinja::LogInfo("YSC new-lift decision for %s @ %#llx: canWhole=1 stackOk=1 use=1 blocks=%zu reason=ok addr=0 target=0 opcode=INVALID depth=0 otherDepth=0 totalSize=0 limit=%llu",
                              functionName.c_str(), static_cast<unsigned long long>(functionStart), blocks.size(),
                              static_cast<unsigned long long>(YSC_WHOLE_FUNCTION_LIFT_SIZE_LIMIT));
     }
-    else if (!useFunctionLevelStackLifting && startsWithEnter)
+    else if (YSCDiagnosticsEnabled() && !useFunctionLevelStackLifting && startsWithEnter)
     {
         std::string functionName = owner && owner->GetSymbol() ? owner->GetSymbol()->GetShortName() : "<unknown>";
         const auto& diag = canWholeFunctionLift ? stackDiagnostic : canDiagnostic;
@@ -2405,21 +3232,29 @@ bool YSCArchitecture::LiftFunction(BinaryNinja::LowLevelILFunction* function,
         }
     };
 
+    auto emitUnsupportedInstruction = [&](uint64_t addr, const uint8_t* opcode, size_t oldLen, size_t& len) {
+        size_t instrLen = GetRawInstructionLength(view, addr, opcode, oldLen);
+        if (instrLen == 0)
+            instrLen = oldLen > 0 ? 1 : 0;
+        AddBenignInstructionIL(*function, opcode && oldLen > 0 ? opcode[0] : OP_NOP);
+        len = instrLen;
+        return instrLen != 0;
+    };
+
+    size_t liftedInstructionCount = 0;
+    size_t fallbackInstructionCount = 0;
+    size_t directCallCount = 0;
+    size_t nativeCallCount = 0;
+    size_t indirectCallCount = 0;
+    size_t inlinedCallCheckCount = 0;
+
     for (auto& block : blocks)
     {
         symbolicLifter.Reset();
-        // The current symbolic VM stack is local to a basic block. Branch/join blocks
-        // must stay on the old physical stack model until cross-edge VM stack-state
-        // propagation exists. For large entry/setup blocks, allow symbolic lifting for
-        // the straight-line prefix even if the block eventually ends in a branch; this
-        // preserves the main-script static initialization cleanup. Small control-flow
-        // blocks are usually YSC short-circuit boolean helpers and must remain physical.
-        bool hasIncomingEdges = !block->GetIncomingEdges().empty();
-        bool hasControlFlow = BlockContainsControlFlow(view, block, GetMaxInstructionLength());
-        size_t rawInstructionCount = CountRawInstructions(view, block, GetMaxInstructionLength());
-        bool allowSymbolicBlock = useFunctionLevelStackLifting || (!hasIncomingEdges && (!hasControlFlow || rawInstructionCount >= 32));
+        bool allowSymbolicBlock = block->GetArchitecture() == this;
         function->SetCurrentSourceBlock(block);
         context.PrepareBlockTranslation(function, block->GetArchitecture(), block->GetStart());
+        function->SetCurrentAddress(block->GetArchitecture(), block->GetStart());
 
         if (auto label = function->GetLabelForAddress(block->GetArchitecture(), block->GetStart()))
             function->MarkLabel(*label);
@@ -2439,11 +3274,15 @@ bool YSCArchitecture::LiftFunction(BinaryNinja::LowLevelILFunction* function,
         }
 
         size_t blockStartInstr = function->GetInstructionCount();
+        bool blockSymbolicValid = true;
 
         for (uint64_t addr = block->GetStart(); addr < block->GetEnd();)
         {
-            if (view->AnalysisIsAborted())
-                return false;
+            if (IsYSCArchitectureViewRetired(view) || view->AnalysisIsAborted())
+            {
+                function->Finalize();
+                return true;
+            }
 
             function->SetCurrentAddress(block->GetArchitecture(), addr);
             function->ClearIndirectBranches();
@@ -2459,14 +3298,14 @@ bool YSCArchitecture::LiftFunction(BinaryNinja::LowLevelILFunction* function,
 
             if (!opcode || len == 0)
             {
-                ownedOpcode.resize(GetMaxInstructionLength());
+                ownedOpcode.resize(YSC_MAX_INTERNAL_INSTRUCTION_LENGTH);
                 len = view->Read(ownedOpcode.data(), addr, ownedOpcode.size());
                 opcode = ownedOpcode.data();
             }
 
             if (len == 0)
             {
-                function->AddInstruction(function->Unimplemented());
+                function->AddInstruction(function->Nop());
                 break;
             }
 
@@ -2532,38 +3371,60 @@ bool YSCArchitecture::LiftFunction(BinaryNinja::LowLevelILFunction* function,
                 }
                 status = symbolicLifter.Lift(opcode, addr, len);
             }
+            if (status)
+                liftedInstructionCount++;
 
             if (!status)
             {
-                if (useFunctionLevelStackLifting)
+                blockSymbolicValid = false;
+                fallbackInstructionCount++;
+                symbolicLifter.Reset();
+                int delta = 0;
+                bool terminal = false;
+                size_t instrLen = GetRawInstructionLength(view, addr, opcode, oldLen);
+                if (instrLen != 0 && GetYSCStackEffect(view, addr, opcode, instrLen, delta, terminal))
                 {
-                    std::string functionName = owner && owner->GetSymbol() ? owner->GetSymbol()->GetShortName() : "<unknown>";
-                    BinaryNinja::LogInfo("YSC new-lift abort for %s @ %#llx: addr=%#llx opcode=%s reason=symbolic-lift-failed",
-                                         functionName.c_str(), static_cast<unsigned long long>(functionStart),
-                                         static_cast<unsigned long long>(addr), OpcodeName(opcode[0]));
-                    return false;
+                    function->AddInstruction(terminal ? function->NoReturn() : function->Nop());
+                    len = instrLen;
+                    status = true;
                 }
-                symbolicLifter.DisableAndFlush();
-                len = oldLen;
-                status = block->GetArchitecture()->GetInstructionLowLevelIL(opcode, addr, len, *function);
+                else
+                {
+                    status = emitUnsupportedInstruction(addr, opcode, oldLen, len);
+                }
             }
             size_t instrCountAfter = function->GetInstructionCount();
 
             if (!status || len == 0)
             {
-                if (useFunctionLevelStackLifting)
-                {
-                    std::string functionName = owner && owner->GetSymbol() ? owner->GetSymbol()->GetShortName() : "<unknown>";
-                    BinaryNinja::LogInfo("YSC new-lift abort for %s @ %#llx: addr=%#llx opcode=%s reason=bad-lift-result len=%zu status=%d",
-                                         functionName.c_str(), static_cast<unsigned long long>(functionStart),
-                                         static_cast<unsigned long long>(addr), OpcodeName(opcode[0]), len, status ? 1 : 0);
-                    return false;
-                }
-                function->AddInstruction(function->Unimplemented());
+                function->AddInstruction(function->Nop());
                 break;
             }
 
-            context.CheckForInlinedCall(block, instrCountBefore, instrCountAfter, addr, addr + len, opcode, len, {});
+            if (opcode[0] == OP_CALL)
+                directCallCount++;
+            else if (opcode[0] == OP_NATIVE)
+                nativeCallCount++;
+            else if (opcode[0] == OP_CALLINDIRECT)
+                indirectCallCount++;
+
+            bool checkInlinedCall = !limitFunctionFanout &&
+                (opcode[0] == OP_CALL ||
+                 (YSCExtraInlinedCallChecksEnabled() &&
+                  (opcode[0] == OP_NATIVE || opcode[0] == OP_CALLINDIRECT)));
+            if (checkInlinedCall)
+            {
+                if (YSCTraceCallChecksEnabled())
+                {
+                    YSC_TRACE_SCOPE("ysc.bn", "CheckForInlinedCall");
+                    context.CheckForInlinedCall(block, instrCountBefore, instrCountAfter, addr, addr + len, opcode, len, {});
+                }
+                else
+                {
+                    context.CheckForInlinedCall(block, instrCountBefore, instrCountAfter, addr, addr + len, opcode, len, {});
+                }
+                inlinedCallCheckCount++;
+            }
             addr += len;
         }
 
@@ -2577,14 +3438,14 @@ bool YSCArchitecture::LiftFunction(BinaryNinja::LowLevelILFunction* function,
             blockEndsTerminal = isTerminal(currentLastInstr);
         }
 
-        if (useFunctionLevelStackLifting && !blockEndsTerminal && !block->GetOutgoingEdges().empty())
+        if (useFunctionLevelStackLifting && blockSymbolicValid && !blockEndsTerminal && !block->GetOutgoingEdges().empty())
         {
             bool storedAnySuccessor = false;
             for (auto& edge : block->GetOutgoingEdges())
             {
                 if (!edge.target)
                     continue;
-                if (IsZeroReturnLeaveBlock(view, edge.target, GetMaxInstructionLength()))
+                if (IsZeroReturnLeaveBlock(view, edge.target, YSC_MAX_INTERNAL_INSTRUCTION_LENGTH))
                     continue;
                 auto depthIt = vmInputDepths.find(edge.target->GetStart());
                 auto indexIt = vmBlockIndices.find(edge.target->GetStart());
@@ -2605,7 +3466,7 @@ bool YSCArchitecture::LiftFunction(BinaryNinja::LowLevelILFunction* function,
                 function->AddInstruction(function->Nop());
                 goto ysc_block_nonempty;
             }
-            function->AddInstruction(function->Unimplemented());
+            function->AddInstruction(function->Nop());
             continue;
         }
 
@@ -2621,15 +3482,47 @@ ysc_block_nonempty:
             continue;
         }
 
-        if (auto exitLabel = function->GetLabelForAddress(block->GetArchitecture(), block->GetEnd()))
-            function->AddInstruction(function->Goto(*exitLabel));
+        if (functionInstructionStarts.contains(block->GetEnd()) || IsIndexedInstructionStart(liftCodeIndex, block->GetEnd()))
+        {
+            if (auto exitLabel = function->GetLabelForAddress(block->GetArchitecture(), block->GetEnd()))
+                function->AddInstruction(function->Goto(*exitLabel));
+            else
+                function->AddInstruction(function->Jump(function->ConstPointer(GetAddressSize(), block->GetEnd())));
+        }
         else
-            function->AddInstruction(function->Jump(function->ConstPointer(GetAddressSize(), block->GetEnd())));
+        {
+            function->AddInstruction(function->NoReturn());
+        }
     }
 
-    if (function->GetInstructionCount() == 0)
-        function->AddInstruction(function->Unimplemented());
+    if (function->GetInstructionCount() == 0 && !blocks.empty())
+    {
+        auto block = blocks.front();
+        function->SetCurrentSourceBlock(block);
+        context.PrepareBlockTranslation(function, block->GetArchitecture(), block->GetStart());
+        function->SetCurrentAddress(block->GetArchitecture(), block->GetStart());
+        if (auto label = function->GetLabelForAddress(block->GetArchitecture(), block->GetStart()))
+            function->MarkLabel(*label);
+        function->AddInstruction(function->Nop());
+    }
 
+    YSCTrace::Counter("ysc.arch", "lift.instructions", static_cast<int64_t>(liftedInstructionCount));
+    YSCTrace::Counter("ysc.arch", "lift.fallbackInstructions", static_cast<int64_t>(fallbackInstructionCount));
+    YSCTrace::Counter("ysc.arch", "lift.directCalls", static_cast<int64_t>(directCallCount));
+    YSCTrace::Counter("ysc.arch", "lift.nativeCalls", static_cast<int64_t>(nativeCallCount));
+    YSCTrace::Counter("ysc.arch", "lift.indirectCalls", static_cast<int64_t>(indirectCallCount));
+    YSCTrace::Counter("ysc.arch", "lift.inlinedCallChecks", static_cast<int64_t>(inlinedCallCheckCount));
+    YSCTrace::Counter("ysc.arch", "lift.callFanoutLimited", limitFunctionFanout ? 1 : 0);
+    if (auto cache = GetYSCFunctionFactCache(view))
+    {
+        std::lock_guard<std::mutex> guard(g_functionFactMutex);
+        YSCTrace::Counter("ysc.arch", "functionFacts.enterHits", static_cast<int64_t>(cache->enterHits));
+        YSCTrace::Counter("ysc.arch", "functionFacts.enterMisses", static_cast<int64_t>(cache->enterMisses));
+        YSCTrace::Counter("ysc.arch", "functionFacts.returnHits", static_cast<int64_t>(cache->returnHits));
+        YSCTrace::Counter("ysc.arch", "functionFacts.returnMisses", static_cast<int64_t>(cache->returnMisses));
+    }
+    YSCTrace::MemorySnapshot("lift.end.rssKb");
+    YSCTrace::FlushThrottled();
     function->Finalize();
     return true;
 }
