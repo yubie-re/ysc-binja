@@ -40,7 +40,7 @@ public:
             return;
         const T operand = GetOperand<T>(data, len, 0);
         OpBase::GetInstructionText(data, addr, len, result);
-        result.push_back(BinaryNinja::InstructionTextToken(BNInstructionTextTokenType::IntegerToken, fmt::format("{:x}", operand.ToValue()), operand.ToValue()));
+        AppendYSCGlobalOperandText(operand.ToValue(), result);
     }
 
     bool GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il) override

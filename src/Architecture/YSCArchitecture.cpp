@@ -11,6 +11,7 @@
 #include <mutex>
 #include <queue>
 #include <set>
+#include <tuple>
 #include <unordered_map>
 
 namespace
@@ -23,7 +24,7 @@ constexpr size_t YSC_STACK_ANALYSIS_WORK_LIMIT = 4096;
 constexpr size_t YSC_FUNCTION_ANALYSIS_FANOUT_LIMIT = 2048;
 constexpr size_t YSC_MAX_RUNTIME_ARRAY_OFFSET_ALIASES_PER_BASE = 16;
 constexpr bool YSC_ENABLE_AUTO_FUNCTION_SIGNATURES = false;
-constexpr bool YSC_ENABLE_RUNTIME_ARRAY_METADATA = false;
+constexpr bool YSC_ENABLE_RUNTIME_ARRAY_METADATA_BY_DEFAULT = true;
 
 struct YSCLiftDiagnostic
 {
@@ -46,6 +47,11 @@ bool YSCEnvEnabled(const char* name, bool defaultValue = false)
     if ((value[0] == 'f' || value[0] == 'F') && value[1] == '\0')
         return false;
     return true;
+}
+
+bool YSCRuntimeArrayMetadataEnabled()
+{
+    return YSCEnvEnabled("YSC_BINJA_RUNTIME_ARRAY_METADATA", YSC_ENABLE_RUNTIME_ARRAY_METADATA_BY_DEFAULT);
 }
 
 size_t YSCEnvSize(const char* name, size_t defaultValue)
@@ -1675,8 +1681,8 @@ class YSCSymbolicLifter
         case OP_PUSH_CONST_F: if (len < 5) return false; Push(m_il.FloatConstSingle(ReadUnaligned<float>(data))); len = 5; return true;
         case OP_DUP: return Dup(len);
         case OP_DROP: return Drop(len);
-        case OP_IADD: return Binary(len, &BinaryNinja::LowLevelILFunction::Add);
-        case OP_ISUB: return Binary(len, &BinaryNinja::LowLevelILFunction::Sub);
+        case OP_IADD: return PointerAdd(len);
+        case OP_ISUB: return PointerSub(len);
         case OP_IMUL: return Binary(len, &BinaryNinja::LowLevelILFunction::Mult);
         case OP_IDIV: return Binary(len, &BinaryNinja::LowLevelILFunction::DivSigned);
         case OP_IMOD: return Binary(len, &BinaryNinja::LowLevelILFunction::ModSigned);
@@ -1711,9 +1717,9 @@ class YSCSymbolicLifter
         case OP_VMUL: return VectorBinary(len, &BinaryNinja::LowLevelILFunction::FloatMult);
         case OP_VDIV: return VectorBinary(len, &BinaryNinja::LowLevelILFunction::FloatDiv);
         case OP_VNEG: return VectorUnary(len, &BinaryNinja::LowLevelILFunction::FloatNeg);
-        case OP_IADD_U8: if (len < 2) return false; return ImmBinary(len, data[0], &BinaryNinja::LowLevelILFunction::Add);
+        case OP_IADD_U8: if (len < 2) return false; return PointerImmAdd(len, data[0], 2);
         case OP_IMUL_U8: if (len < 2) return false; return ImmBinary(len, data[0], &BinaryNinja::LowLevelILFunction::Mult);
-        case OP_IADD_S16: if (len < 3) return false; return ImmBinary(len, static_cast<uint32_t>(ReadUnaligned<int16_t>(data)), &BinaryNinja::LowLevelILFunction::Add, 3);
+        case OP_IADD_S16: if (len < 3) return false; return PointerImmAdd(len, ReadUnaligned<int16_t>(data), 3);
         case OP_IMUL_S16: if (len < 3) return false; return ImmBinary(len, static_cast<uint32_t>(ReadUnaligned<int16_t>(data)), &BinaryNinja::LowLevelILFunction::Mult, 3);
         case OP_IOFFSET: return IOffset(len);
         case OP_IOFFSET_U8: if (len < 2) return false; return IOffsetImm(len, data[0], 2);
@@ -1883,6 +1889,22 @@ class YSCSymbolicLifter
 
   private:
     enum class Kind { Expr, LocalAddr, Address };
+    struct RuntimeArrayMetadata
+    {
+        uint64_t headerAddress = 0;
+        uint64_t dataAddress = 0;
+        uint64_t baseIndex = 0;
+        uint32_t stride = 0;
+        bool global = false;
+    };
+
+    struct RuntimePointerProvenance
+    {
+        RuntimeArrayMetadata array;
+        int64_t offsetBytes = 0;
+        bool dynamicOffset = false;
+    };
+
     struct Value
     {
         BinaryNinja::ExprId expr = 0;
@@ -1891,6 +1913,8 @@ class YSCSymbolicLifter
         uint64_t address = 0;
         std::optional<uint32_t> constValue;
         std::optional<uint64_t> runtimeDataAddress;
+        std::optional<RuntimeArrayMetadata> runtimeArray;
+        std::optional<RuntimePointerProvenance> runtimePointer;
     };
 
     using BinaryOp = BinaryNinja::ExprId (BinaryNinja::LowLevelILFunction::*)(size_t, BinaryNinja::ExprId, BinaryNinja::ExprId, uint32_t, const BinaryNinja::ILSourceLocation&);
@@ -1943,10 +1967,56 @@ class YSCSymbolicLifter
         }
         Push((m_il.*op)(4, lhs.expr, rhs.expr, 0, {})); len = 1; return true;
     }
+    bool PointerAdd(size_t& len)
+    {
+        Value rhs, lhs;
+        if (!Pop(rhs)) return false;
+        if (!Pop(lhs))
+        {
+            uint32_t fallbackSlot = m_seededStackDepth > 0 ? static_cast<uint32_t>(m_seededStackDepth - 1) : 0;
+            lhs = Value{m_il.Register(4, StackTemp(m_currentBlockIndex, fallbackSlot)), Kind::Expr, 0, 0, std::nullopt, std::nullopt};
+        }
+
+        auto expr = m_il.Add(4, lhs.expr, rhs.expr);
+        auto provenance = PointerArithmeticProvenance(lhs, rhs, true);
+        PushPointerArithmeticResult(expr, provenance);
+        len = 1;
+        return true;
+    }
+    bool PointerSub(size_t& len)
+    {
+        Value rhs, lhs;
+        if (!Pop(rhs)) return false;
+        if (!Pop(lhs))
+        {
+            uint32_t fallbackSlot = m_seededStackDepth > 0 ? static_cast<uint32_t>(m_seededStackDepth - 1) : 0;
+            lhs = Value{m_il.Register(4, StackTemp(m_currentBlockIndex, fallbackSlot)), Kind::Expr, 0, 0, std::nullopt, std::nullopt};
+        }
+
+        auto expr = m_il.Sub(4, lhs.expr, rhs.expr);
+        auto provenance = (!rhs.runtimePointer) ? lhs.runtimePointer : std::nullopt;
+        if (provenance)
+            provenance->dynamicOffset = true;
+        PushPointerArithmeticResult(expr, provenance);
+        len = 1;
+        return true;
+    }
     bool ImmBinary(size_t& len, uint32_t imm, BinaryOp op, size_t insnLen = 2)
     {
         Value lhs; if (!Pop(lhs)) return false;
         Push((m_il.*op)(4, lhs.expr, m_il.Const(4, imm), 0, {})); len = insnLen; return true;
+    }
+    bool PointerImmAdd(size_t& len, int64_t imm, size_t insnLen)
+    {
+        Value lhs;
+        if (!Pop(lhs)) return false;
+        auto expr = AddOffset(lhs.expr, imm);
+        auto provenance = lhs.runtimePointer;
+        if (provenance)
+            provenance->dynamicOffset = true;
+        PushPointerArithmeticResult(expr, provenance);
+        len = insnLen;
+        return true;
     }
     bool Unary(size_t& len, UnaryOp op)
     {
@@ -2109,7 +2179,9 @@ class YSCSymbolicLifter
         if (address.kind == Kind::Address)
         {
             uint64_t dataAddress = address.address + 4;
-            DefineRuntimeArrayDataAddress(address.address, dataAddress, stride);
+            auto metadata = GetRuntimeArrayMetadata(address.address, dataAddress, stride);
+            if (metadata)
+                DefineRuntimeArrayDataAddress(*metadata);
             return m_il.Add(4, RuntimePointer(dataAddress), m_il.Mult(4, m_il.Const(4, stride * 4), index.expr));
         }
         BinaryNinja::ExprId cellOffset = m_il.Add(4, m_il.Const(4, 1), m_il.Mult(4, m_il.Const(4, stride), index.expr));
@@ -2120,10 +2192,16 @@ class YSCSymbolicLifter
         if (address.kind == Kind::Address)
         {
             uint64_t dataAddress = address.address + 4;
-            DefineRuntimeArrayDataAddress(address.address, dataAddress, stride);
-            return Value{m_il.Add(4, RuntimePointer(dataAddress), m_il.Mult(4, m_il.Const(4, stride * 4), index.expr)), Kind::Expr, 0, 0, std::nullopt, dataAddress};
+            auto metadata = GetRuntimeArrayMetadata(address.address, dataAddress, stride);
+            if (metadata)
+                DefineRuntimeArrayDataAddress(*metadata);
+            auto provenance = metadata ? std::optional<RuntimePointerProvenance>{RuntimePointerProvenance{*metadata, 0, true}} : std::nullopt;
+            return Value{m_il.Add(4, RuntimePointer(dataAddress), m_il.Mult(4, m_il.Const(4, stride * 4), index.expr)), Kind::Expr, 0, 0, std::nullopt, dataAddress, metadata, provenance};
         }
-        return Value{ArrayElementAddress(address, index, stride), Kind::Expr, 0, 0, std::nullopt, address.runtimeDataAddress};
+        auto provenance = address.runtimePointer;
+        if (provenance)
+            provenance->dynamicOffset = true;
+        return Value{ArrayElementAddress(address, index, stride), Kind::Expr, 0, 0, std::nullopt, address.runtimeDataAddress, address.runtimeArray, provenance};
     }
     bool Array(uint32_t stride, size_t& len, size_t insnLen)
     {
@@ -2161,11 +2239,51 @@ class YSCSymbolicLifter
     {
         return m_il.ConstPointer(4, address);
     }
+    std::optional<RuntimePointerProvenance> PointerArithmeticProvenance(const Value& lhs, const Value& rhs, bool commutative)
+    {
+        if (lhs.runtimePointer && !rhs.runtimePointer)
+        {
+            auto provenance = lhs.runtimePointer;
+            provenance->dynamicOffset = true;
+            return provenance;
+        }
+        if (commutative && rhs.runtimePointer && !lhs.runtimePointer)
+        {
+            auto provenance = rhs.runtimePointer;
+            provenance->dynamicOffset = true;
+            return provenance;
+        }
+        return std::nullopt;
+    }
+    std::optional<RuntimePointerProvenance> RuntimePointerWithOffset(
+        const std::optional<RuntimePointerProvenance>& provenance, int64_t offsetBytes)
+    {
+        if (!provenance)
+            return std::nullopt;
+        auto result = provenance;
+        result->offsetBytes += offsetBytes;
+        return result;
+    }
+    void PushPointerArithmeticResult(
+        BinaryNinja::ExprId expr, const std::optional<RuntimePointerProvenance>& provenance)
+    {
+        if (!provenance)
+        {
+            Push(expr);
+            return;
+        }
+        DefineRuntimePointerAlias(*provenance);
+        m_stack.push_back(Value{
+            expr, Kind::Expr, 0, 0, std::nullopt, provenance->array.dataAddress, provenance->array, provenance});
+    }
     bool IOffset(size_t& len)
     {
         Value base, index;
         if (!Pop(base) || !Pop(index)) return false;
-        m_stack.push_back(Value{m_il.Add(4, base.expr, m_il.Mult(4, index.expr, m_il.Const(4, 4))), Kind::Expr, 0, 0, std::nullopt, base.runtimeDataAddress});
+        auto provenance = base.runtimePointer;
+        if (provenance)
+            provenance->dynamicOffset = true;
+        m_stack.push_back(Value{m_il.Add(4, base.expr, m_il.Mult(4, index.expr, m_il.Const(4, 4))), Kind::Expr, 0, 0, std::nullopt, base.runtimeDataAddress, base.runtimeArray, provenance});
         len = 1;
         return true;
     }
@@ -2175,13 +2293,19 @@ class YSCSymbolicLifter
         if (!Pop(base)) return false;
         int64_t offsetBytes = operand * 4;
         if (base.kind == Kind::Address)
+        {
+            DefineRuntimeAddressOffsetAlias(base.address, offsetBytes);
             PushAddress(static_cast<uint64_t>(static_cast<int64_t>(base.address) + offsetBytes));
+        }
         else
         {
-            if (base.runtimeDataAddress)
-                DefineRuntimeArrayOffsetAlias(*base.runtimeDataAddress, offsetBytes);
+            auto provenance = RuntimePointerWithOffset(base.runtimePointer, offsetBytes);
+            if (provenance)
+                DefineRuntimePointerAlias(*provenance);
+            else if (base.runtimeArray)
+                DefineRuntimeArrayOffsetAlias(*base.runtimeArray, offsetBytes);
             auto expr = AddOffset(base.expr, offsetBytes);
-            m_stack.push_back(Value{expr, Kind::Expr, 0, 0, std::nullopt, base.runtimeDataAddress});
+            m_stack.push_back(Value{expr, Kind::Expr, 0, 0, std::nullopt, base.runtimeDataAddress, base.runtimeArray, provenance});
         }
         len = insnLen;
         return true;
@@ -2194,13 +2318,17 @@ class YSCSymbolicLifter
         if (base.kind == Kind::Address)
         {
             uint64_t address = static_cast<uint64_t>(static_cast<int64_t>(base.address) + offsetBytes);
+            DefineRuntimeAddressOffsetAlias(base.address, offsetBytes);
             DefineRuntimeDataAddress(address);
             Push(m_il.Load(4, m_il.ConstPointer(4, address)));
         }
         else
         {
-            if (base.runtimeDataAddress)
-                DefineRuntimeArrayOffsetAlias(*base.runtimeDataAddress, offsetBytes);
+            auto provenance = RuntimePointerWithOffset(base.runtimePointer, offsetBytes);
+            if (provenance)
+                DefineRuntimePointerAlias(*provenance);
+            else if (base.runtimeArray)
+                DefineRuntimeArrayOffsetAlias(*base.runtimeArray, offsetBytes);
             Push(m_il.Load(4, AddOffset(base.expr, offsetBytes)));
         }
         len = insnLen;
@@ -2214,13 +2342,17 @@ class YSCSymbolicLifter
         if (base.kind == Kind::Address)
         {
             uint64_t address = static_cast<uint64_t>(static_cast<int64_t>(base.address) + offsetBytes);
+            DefineRuntimeAddressOffsetAlias(base.address, offsetBytes);
             DefineRuntimeDataAddress(address);
             m_il.AddInstruction(m_il.Store(4, m_il.ConstPointer(4, address), value.expr));
         }
         else
         {
-            if (base.runtimeDataAddress)
-                DefineRuntimeArrayOffsetAlias(*base.runtimeDataAddress, offsetBytes);
+            auto provenance = RuntimePointerWithOffset(base.runtimePointer, offsetBytes);
+            if (provenance)
+                DefineRuntimePointerAlias(*provenance);
+            else if (base.runtimeArray)
+                DefineRuntimeArrayOffsetAlias(*base.runtimeArray, offsetBytes);
             m_il.AddInstruction(m_il.Store(4, AddOffset(base.expr, offsetBytes), value.expr));
         }
         len = insnLen;
@@ -2575,7 +2707,7 @@ class YSCSymbolicLifter
 
     void DefineRuntimeDataAddress(uint64_t address)
     {
-        if (!YSC_ENABLE_RUNTIME_ARRAY_METADATA || !m_view)
+        if (!YSCRuntimeArrayMetadataEnabled() || !m_view)
             return;
         auto globals = m_view->GetSectionByName("GLOBALS");
         if (globals && address >= globals->GetStart() && address < globals->GetEnd())
@@ -2586,42 +2718,116 @@ class YSCSymbolicLifter
     }
 
     inline static std::mutex g_runtimeArrayShapeMutex;
-    inline static std::set<uint64_t> g_definedRuntimeArrayBases;
-    inline static std::set<uint64_t> g_definedRuntimeArrayOffsetAliases;
-    inline static std::map<uint64_t, size_t> g_runtimeArrayOffsetAliasCounts;
+    inline static std::set<std::tuple<uintptr_t, uint64_t, uint32_t>> g_definedRuntimeArrayBases;
+    inline static std::set<std::tuple<uintptr_t, uint64_t, uint32_t>> g_definedRuntimeArrayOffsetAliases;
+    inline static std::map<std::tuple<uintptr_t, uint64_t, uint32_t>, size_t> g_runtimeArrayOffsetAliasCounts;
 
-    uint64_t RuntimeArrayKey(uint64_t dataAddress, uint32_t stride) const
+    uintptr_t RuntimeMetadataViewKey() const
     {
-        return (dataAddress << 16) ^ stride;
+        return reinterpret_cast<uintptr_t>(m_view);
     }
 
-    void DefineRuntimeArrayDataAddress(uint64_t headerAddress, uint64_t dataAddress, uint32_t stride)
+    std::string RuntimeMetadataPrefix(const RuntimeArrayMetadata& metadata) const
     {
-        if (!YSC_ENABLE_RUNTIME_ARRAY_METADATA)
-            return;
-        std::lock_guard<std::mutex> guard(g_runtimeArrayShapeMutex);
-        DefineRuntimeArrayDataAddressLocked(headerAddress, dataAddress, stride);
+        return metadata.global ? "Global" : "Static";
     }
 
-    void DefineRuntimeArrayDataAddressLocked(uint64_t headerAddress, uint64_t dataAddress, uint32_t stride)
+    std::optional<RuntimeArrayMetadata> GetRuntimeArrayMetadata(uint64_t headerAddress, uint64_t dataAddress, uint32_t stride) const
     {
         if (!m_view || stride == 0 || stride > 4096)
+            return std::nullopt;
+        auto globals = m_view->GetSectionByName("GLOBALS");
+        auto statics = m_view->GetSectionByName("STATICS");
+        if (globals && dataAddress >= globals->GetStart() && dataAddress < globals->GetEnd())
+            return RuntimeArrayMetadata{headerAddress, dataAddress, (headerAddress - globals->GetStart()) / 4, stride, true};
+        if (statics && dataAddress >= statics->GetStart() && dataAddress < statics->GetEnd())
+            return RuntimeArrayMetadata{headerAddress, dataAddress, (headerAddress - statics->GetStart()) / 4, stride, false};
+        return std::nullopt;
+    }
+
+    void DefineRuntimeArrayDataAddress(const RuntimeArrayMetadata& metadata)
+    {
+        if (!YSCRuntimeArrayMetadataEnabled() || !m_view)
+            return;
+        std::lock_guard<std::mutex> guard(g_runtimeArrayShapeMutex);
+        DefineRuntimeArrayDataAddressLocked(metadata);
+    }
+
+    void DefineRuntimeArrayDataAddressLocked(const RuntimeArrayMetadata& metadata)
+    {
+        if (!m_view || metadata.stride == 0 || metadata.stride > 4096)
             return;
 
-        uint64_t key = RuntimeArrayKey(dataAddress, stride);
+        auto key = std::make_tuple(RuntimeMetadataViewKey(), metadata.dataAddress, metadata.stride);
         if (!g_definedRuntimeArrayBases.insert(key).second)
+            return;
+
+        DefineAutoInt32DataSymbol(m_view, metadata.dataAddress,
+            fmt::format("{}_{}_arr{}_data", RuntimeMetadataPrefix(metadata), metadata.baseIndex, metadata.stride));
+    }
+
+    uint64_t RuntimeArrayMaxOffsetBytes(const RuntimeArrayMetadata& metadata) const
+    {
+        uint64_t strideBytes = static_cast<uint64_t>(metadata.stride) * 4;
+        if (strideBytes < 0x100)
+            strideBytes = 0x100;
+        if (strideBytes > 0x1000)
+            strideBytes = 0x1000;
+        return strideBytes;
+    }
+
+    void DefineRuntimePointerAlias(const RuntimePointerProvenance& provenance)
+    {
+        if (provenance.offsetBytes <= 0)
+            return;
+        DefineRuntimeArrayOffsetAlias(provenance.array, provenance.offsetBytes);
+    }
+
+    void DefineRuntimeArrayOffsetAlias(const RuntimeArrayMetadata& metadata, int64_t offsetBytes)
+    {
+        if (!YSCRuntimeArrayMetadataEnabled() || !m_view || offsetBytes < 0 ||
+            static_cast<uint64_t>(offsetBytes) > RuntimeArrayMaxOffsetBytes(metadata))
+            return;
+        uint64_t aliasAddress = metadata.dataAddress + static_cast<uint64_t>(offsetBytes);
+        if (!RuntimeAddressInMetadataSection(metadata, aliasAddress))
+            return;
+
+        std::lock_guard<std::mutex> guard(g_runtimeArrayShapeMutex);
+        DefineRuntimeArrayDataAddressLocked(metadata);
+        auto countKey = std::make_tuple(RuntimeMetadataViewKey(), metadata.dataAddress, metadata.stride);
+        auto& aliasCount = g_runtimeArrayOffsetAliasCounts[countKey];
+        if (aliasCount >= YSC_MAX_RUNTIME_ARRAY_OFFSET_ALIASES_PER_BASE)
+            return;
+        auto aliasKey = std::make_tuple(RuntimeMetadataViewKey(), aliasAddress, metadata.stride);
+        if (!g_definedRuntimeArrayOffsetAliases.insert(aliasKey).second)
+            return;
+        aliasCount++;
+        DefineAutoInt32DataSymbol(m_view, aliasAddress,
+            fmt::format("{}_{}_arr{}_f{:x}", RuntimeMetadataPrefix(metadata), metadata.baseIndex,
+                metadata.stride, static_cast<uint64_t>(offsetBytes)));
+    }
+
+    bool RuntimeAddressInMetadataSection(const RuntimeArrayMetadata& metadata, uint64_t address) const
+    {
+        auto section = metadata.global ? m_view->GetSectionByName("GLOBALS") : m_view->GetSectionByName("STATICS");
+        return section && address >= section->GetStart() && address < section->GetEnd();
+    }
+
+    void DefineRuntimeAddressOffsetAlias(uint64_t baseAddress, int64_t offsetBytes)
+    {
+        if (!YSCRuntimeArrayMetadataEnabled() || !m_view || offsetBytes <= 0 || offsetBytes > 0x100)
             return;
 
         auto globals = m_view->GetSectionByName("GLOBALS");
         auto statics = m_view->GetSectionByName("STATICS");
         BinaryNinja::Section* section = nullptr;
         std::string prefix;
-        if (globals && dataAddress >= globals->GetStart() && dataAddress < globals->GetEnd())
+        if (globals && baseAddress >= globals->GetStart() && baseAddress < globals->GetEnd())
         {
             section = globals;
             prefix = "Global";
         }
-        else if (statics && dataAddress >= statics->GetStart() && dataAddress < statics->GetEnd())
+        else if (statics && baseAddress >= statics->GetStart() && baseAddress < statics->GetEnd())
         {
             section = statics;
             prefix = "Static";
@@ -2629,44 +2835,22 @@ class YSCSymbolicLifter
         if (!section)
             return;
 
-        uint64_t headerIndex = (headerAddress - section->GetStart()) / 4;
-        DefineAutoInt32DataSymbol(m_view, dataAddress, fmt::format("{}_{}_data", prefix, headerIndex));
-    }
-
-    void DefineRuntimeArrayOffsetAlias(uint64_t dataAddress, int64_t offsetBytes)
-    {
-        if (!YSC_ENABLE_RUNTIME_ARRAY_METADATA || !m_view || offsetBytes < 0 || offsetBytes > 0x100)
-            return;
-        uint64_t aliasAddress = dataAddress + static_cast<uint64_t>(offsetBytes);
-
-        auto globals = m_view->GetSectionByName("GLOBALS");
-        auto statics = m_view->GetSectionByName("STATICS");
-        BinaryNinja::Section* section = nullptr;
-        std::string prefix;
-        if (globals && dataAddress >= globals->GetStart() && dataAddress < globals->GetEnd())
-        {
-            section = globals;
-            prefix = "Global";
-        }
-        else if (statics && dataAddress >= statics->GetStart() && dataAddress < statics->GetEnd())
-        {
-            section = statics;
-            prefix = "Static";
-        }
-        if (!section || aliasAddress >= section->GetEnd())
+        uint64_t aliasAddress = baseAddress + static_cast<uint64_t>(offsetBytes);
+        if (aliasAddress >= section->GetEnd())
             return;
 
         std::lock_guard<std::mutex> guard(g_runtimeArrayShapeMutex);
-        auto& aliasCount = g_runtimeArrayOffsetAliasCounts[dataAddress];
+        auto countKey = std::make_tuple(RuntimeMetadataViewKey(), baseAddress, 0);
+        auto& aliasCount = g_runtimeArrayOffsetAliasCounts[countKey];
         if (aliasCount >= YSC_MAX_RUNTIME_ARRAY_OFFSET_ALIASES_PER_BASE)
             return;
-        if (!g_definedRuntimeArrayOffsetAliases.insert(aliasAddress).second)
+        auto aliasKey = std::make_tuple(RuntimeMetadataViewKey(), aliasAddress, 0);
+        if (!g_definedRuntimeArrayOffsetAliases.insert(aliasKey).second)
             return;
         aliasCount++;
-        uint64_t dataIndex = (dataAddress - section->GetStart()) / 4;
-        uint64_t headerIndex = dataIndex > 0 ? dataIndex - 1 : dataIndex;
+        uint64_t baseIndex = (baseAddress - section->GetStart()) / 4;
         DefineAutoInt32DataSymbol(m_view, aliasAddress,
-            fmt::format("{}_{}_data_plus_{:x}", prefix, headerIndex, static_cast<uint64_t>(offsetBytes)));
+            fmt::format("{}_{}_f{:x}", prefix, baseIndex, static_cast<uint64_t>(offsetBytes)));
     }
 
     YSCArchitecture* m_arch;

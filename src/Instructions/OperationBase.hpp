@@ -7,6 +7,17 @@
 
 class YSCBlockAnalysisContext;
 
+inline void AppendYSCGlobalOperandText(uint32_t operand, std::vector<BinaryNinja::InstructionTextToken>& result)
+{
+    uint32_t block = operand >> 18;
+    uint32_t offset = operand & 0x3ffff;
+    result.push_back(BinaryNinja::InstructionTextToken(
+        BNInstructionTextTokenType::IntegerToken, fmt::format("{:x}", operand), operand));
+    result.push_back(BinaryNinja::InstructionTextToken(
+        BNInstructionTextTokenType::TextToken,
+        fmt::format(" <Global_{} block={} offset={:#x}>", operand, block, offset)));
+}
+
 class OpBase
 {
   public:
