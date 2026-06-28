@@ -1,7 +1,7 @@
 # Binary Ninja YSC Architecture/Lifter
 
 #### Summary
-This project is an architecture plugin for Binary Ninja, allowing you to disassemble and even decompile YSC format scripts from the game *Grand Theft Auto V*. The lifting to BNIL is not perfect due to complex instructions being hard to translate, so psuedocode is not perfect but does get the idea across. Work still has to be done to make each instruction semantically correct.
+This project is an architecture plugin for Binary Ninja, allowing you to disassemble and even decompile YSC format scripts from the game *Grand Theft Auto V*. 
 
 #### How to build/install
 This project requires the Binary Ninja SDK to build. To install, please build with cmake and set your Binary Ninja install folder in binja.cmake.
