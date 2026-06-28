@@ -1,119 +1,15 @@
 #include "inc.hpp"
 #include "YSCView.hpp"
 #include "Architecture/YSCArchitecture.hpp"
+#include "Common/Env.hpp"
 #include "Instructions/OperationEnum.hpp"
 #include "Profiling/YSCTrace.hpp"
-#include "Crossmap.hpp"
+#include "Data/Crossmap.hpp"
+#include "NativeMetadata.hpp"
 #include "json/json.h"
 #include <fstream>
-#include <algorithm>
-#include <cctype>
-#include <cstdlib>
 
 using namespace nlohmann;
-
-#define PAGE_SIZE 0x4000
-
-namespace
-{
-bool GetEnvEnabled(const char* name, bool defaultValue = false)
-{
-    const char* value = std::getenv(name);
-    if (!value)
-        return defaultValue;
-    if (value[0] == '\0' || value[0] == '0')
-        return false;
-    if ((value[0] == 'f' || value[0] == 'F') && value[1] == '\0')
-        return false;
-    return true;
-}
-
-size_t GetEnvSize(const char* name, size_t defaultValue)
-{
-    const char* value = std::getenv(name);
-    if (!value || value[0] == '\0')
-        return defaultValue;
-
-    char* end = nullptr;
-    unsigned long long parsed = std::strtoull(value, &end, 10);
-    if (end == value)
-        return defaultValue;
-    return static_cast<size_t>(parsed);
-}
-}
-
-size_t YSCView::GetPageSize(size_t pageIndex, size_t pageCount, size_t totalSize) const
-{
-    if(pageIndex >= pageCount)
-        return 0;
-    if(pageIndex == pageCount - 1)
-        return (totalSize % PAGE_SIZE) ? (totalSize % PAGE_SIZE) : PAGE_SIZE;
-    return PAGE_SIZE;
-}
-
-uint64_t RotLeft(uint64_t value, uint64_t count)
-{
-    count &= 63;
-    return (value << count) | (value >> (64 - count));
-}
-
-static std::string NormalizeNativeType(std::string type)
-{
-    type.erase(std::remove_if(type.begin(), type.end(), [](unsigned char c) { return std::isspace(c); }), type.end());
-    std::transform(type.begin(), type.end(), type.begin(), [](unsigned char c) { return std::tolower(c); });
-    return type;
-}
-
-static BinaryNinja::Ref<BinaryNinja::Type> NativeJsonTypeToBN(BinaryNinja::Architecture* arch, const std::string& jsonType)
-{
-    using namespace BinaryNinja;
-    std::string type = NormalizeNativeType(jsonType);
-
-    if (type.empty() || type == "any" || type == "object" || type == "scrhandle" || type == "hash" || type == "joaat")
-        return Type::IntegerType(4, true);
-    if (type == "void")
-        return Type::VoidType();
-    if (type == "bool" || type == "boolean" || type == "BOOL" || type == "BOOL" || type == "BOOL" || type == "BOOL")
-        return Type::BoolType();
-    if (type == "float")
-        return Type::FloatType(4);
-    if (type == "double")
-        return Type::FloatType(8);
-    if (type == "char" || type == "int8_t" || type == "uint8_t")
-        return Type::IntegerType(1, type[0] != 'u');
-    if (type == "short" || type == "int16_t" || type == "uint16_t")
-        return Type::IntegerType(2, type[0] != 'u');
-    if (type == "int" || type == "int32_t" || type == "uint" || type == "uint32_t" || type == "dword")
-        return Type::IntegerType(4, type[0] != 'u');
-    if (type == "long" || type == "int64_t" || type == "uint64_t")
-        return Type::IntegerType(8, type[0] != 'u');
-
-    bool isPointer = type.find('*') != std::string::npos || type.ends_with("ptr") || type.ends_with("*");
-    if (isPointer || type == "constchar*" || type == "char*" || type == "string")
-    {
-        bool isString = type.find("char") != std::string::npos || type == "string";
-        Ref<Type> pointee = isString ? Type::IntegerType(1, true, "char") : Type::VoidType();
-        return Type::PointerType(arch, pointee, isString && type.find("const") != std::string::npos);
-    }
-
-    return Type::IntegerType(4, true);
-}
-
-static json::const_iterator FindNativeMetadata(const json& nativeNamespace, uint64_t hash)
-{
-    auto find = nativeNamespace.find(fmt::format("0x{:016X}", hash));
-    if (find != nativeNamespace.end())
-        return find;
-
-    return nativeNamespace.find(fmt::format("0x{:X}", hash));
-}
-
-static std::string NativeSymbolName(const std::string& namespaceName, const std::string& nativeName)
-{
-    std::string combined = fmt::format("{}_{}", namespaceName, nativeName);
-
-    return fmt::format("native_{}", combined);
-}
 
 YSCView::~YSCView()
 {
@@ -149,9 +45,9 @@ bool YSCView::Init()
         YSCTrace::Counter("ysc.view", "staticCount", header.m_staticCount);
         YSCTrace::Counter("ysc.view", "globalCount", header.m_globalCount);
         YSCTrace::Counter("ysc.view", "nativeCount", header.m_nativesCount);
-        size_t functionAnalysisLimit = GetEnvSize("YSC_BINJA_FUNCTION_ANALYSIS_LIMIT", 2048);
+        size_t functionAnalysisLimit = YSCGetEnvSize("YSC_BINJA_FUNCTION_ANALYSIS_LIMIT", 2048);
         bool limitCodeScan = functionAnalysisLimit != 0 && header.m_codeSize > 1024 * 1024 &&
-            !GetEnvEnabled("YSC_BINJA_ENABLE_LARGE_SCRIPT_CODE_SCAN");
+            !YSCGetEnvEnabled("YSC_BINJA_ENABLE_LARGE_SCRIPT_CODE_SCAN");
         uint32_t codeFlags = BNSegmentFlag::SegmentContainsCode | BNSegmentFlag::SegmentReadable;
         if (!limitCodeScan)
             codeFlags |= BNSegmentFlag::SegmentExecutable;
@@ -269,7 +165,7 @@ bool YSCView::Init()
             }
         }
 
-        size_t staticSymbolLimit = GetEnvSize("YSC_BINJA_STATIC_SYMBOL_LIMIT", 4096);
+        size_t staticSymbolLimit = YSCGetEnvSize("YSC_BINJA_STATIC_SYMBOL_LIMIT", 4096);
         if (header.m_staticCount <= staticSymbolLimit)
         {
             YSC_TRACE_SCOPE_I("ysc.view", "Define static symbols", "count", header.m_staticCount);
@@ -292,26 +188,6 @@ bool YSCView::Init()
         return false;
     }
     return true;
-}
-
-void YSCView::WritePages(YSCPointer tablePtr, uint32_t totalSize, uint32_t virtualAddress,
-    uint32_t flags, std::string_view name, BNSectionSemantics semantics)
-{
-    uint32_t pageCount = (totalSize + PAGE_SIZE - 1) / PAGE_SIZE;
-    std::vector<YSCPointer> tableEntries(pageCount);
-
-    GetParentView()->Read(tableEntries.data(), *tablePtr, pageCount * sizeof(YSCPointer));
-
-    for(uint32_t i = 0, offset = virtualAddress; i < pageCount; i++)
-    {
-        uint32_t pageSize = GetPageSize(i, pageCount, totalSize);
-        uint32_t pageFileAddress = *tableEntries[i];
-        uint32_t pageVirtualAddress = offset;
-        //std::vector<uint8_t> page(pageSize);
-        AddAutoSegment(offset, pageSize, pageFileAddress, pageSize, flags);
-        offset += pageSize;
-    }
-    AddAutoSection(std::string(name), virtualAddress, totalSize, semantics);
 }
 
 BinaryNinja::Ref<BinaryNinja::BinaryView> YSCViewType::Create(BinaryNinja::BinaryView *data)

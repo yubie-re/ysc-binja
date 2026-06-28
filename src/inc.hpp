@@ -10,6 +10,6 @@
 #include <iostream>
 #include <filesystem>
 
-#define CODE_OFFSET 0x10000000
+#include "Common/Constants.hpp"
 
 #endif
