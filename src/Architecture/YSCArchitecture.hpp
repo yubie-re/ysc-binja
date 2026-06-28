@@ -58,12 +58,25 @@ const std::array<std::string_view, Reg_MAX> g_RegNames = {
 enum Intrin
 {
     Intrin_StringHash,
+    Intrin_TextLabelAssignString,
+    Intrin_TextLabelAssignInt,
+    Intrin_TextLabelAppendString,
+    Intrin_TextLabelAppendInt,
+    Intrin_TextLabelCopy,
     Intrin_MAX
 };
 
 const std::array<std::string_view, Intrin_MAX> g_intrinNames = {
-    "ysc_string_hash"
+    "ysc_string_hash",
+    "ysc_text_label_assign_string",
+    "ysc_text_label_assign_int",
+    "ysc_text_label_append_string",
+    "ysc_text_label_append_int",
+    "ysc_text_label_copy",
 };
+
+bool EmitYSCTextLabelFallbackLLIL(uint8_t opcode, const uint8_t* data, size_t& len,
+                                  BinaryNinja::LowLevelILFunction& il);
 
 struct YSCSwitchCaseInfo
 {

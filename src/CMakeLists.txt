@@ -10,7 +10,16 @@ FetchContent_Declare(
 set(FETCHCONTENT_UPDATES_DISCONNECTED_MINITRACE ON)
 set(MTR_BUILD_TEST OFF CACHE BOOL "" FORCE)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-FetchContent_MakeAvailable(minitrace)
+FetchContent_GetProperties(minitrace)
+if(NOT minitrace_POPULATED)
+    cmake_policy(PUSH)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
+    FetchContent_Populate(minitrace)
+    cmake_policy(POP)
+    add_subdirectory("${minitrace_SOURCE_DIR}" "${minitrace_BINARY_DIR}" EXCLUDE_FROM_ALL)
+endif()
 
 include_directories(
 ./

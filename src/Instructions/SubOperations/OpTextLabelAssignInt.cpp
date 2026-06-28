@@ -1,5 +1,6 @@
 #include "inc.hpp"
 #include "OpTextLabelAssignInt.hpp"
+#include "Architecture/YSCArchitecture.hpp"
 
 size_t OpTextLabelAssignInt::GetSize()
 {
@@ -20,8 +21,5 @@ void OpTextLabelAssignInt::GetInstructionText(const uint8_t* data, uint64_t addr
 
 bool OpTextLabelAssignInt::GetInstructionLowLevelIL(const uint8_t* data, uint64_t addr, size_t& len, BinaryNinja::LowLevelILFunction& il)
 {
-    // TODO
-    il.AddInstruction(il.Pop(4));
-    il.AddInstruction(il.Pop(4));
-    return true;
+    return EmitYSCTextLabelFallbackLLIL(OP_TEXT_LABEL_ASSIGN_INT, data, len, il);
 }

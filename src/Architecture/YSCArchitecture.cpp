@@ -1524,7 +1524,6 @@ size_t GetRawInstructionLength(BinaryNinja::BinaryView* view, uint64_t addr, con
     case OP_TEXT_LABEL_ASSIGN_INT:
     case OP_TEXT_LABEL_APPEND_STRING:
     case OP_TEXT_LABEL_APPEND_INT:
-    case OP_TEXT_LABEL_COPY:
         return 2;
     case OP_PUSH_CONST_U8_U8:
     case OP_PUSH_CONST_S16:
@@ -1759,14 +1758,19 @@ class YSCSymbolicLifter
         case OP_STRINGHASH: return StringHash(len);
         case OP_IS_BIT_SET: return IsBitSet(len);
         case OP_TEXT_LABEL_ASSIGN_STRING:
+            if (len < 2) return false;
+            return TextLabelAssignString(data[0], len);
         case OP_TEXT_LABEL_ASSIGN_INT:
+            if (len < 2) return false;
+            return TextLabelAssignInt(data[0], len);
         case OP_TEXT_LABEL_APPEND_STRING:
+            if (len < 2) return false;
+            return TextLabelAppendString(data[0], len);
         case OP_TEXT_LABEL_APPEND_INT:
             if (len < 2) return false;
-            return PopDiscard(len, 2, 2);
+            return TextLabelAppendInt(data[0], len);
         case OP_TEXT_LABEL_COPY:
-            if (len < 2) return false;
-            return PopDiscard(len, 3, 2);
+            return TextLabelCopy(len);
         case OP_J:
             return Jump(opcode, addr, len);
         case OP_JZ:
@@ -2233,6 +2237,42 @@ class YSCSymbolicLifter
         len = insnLen;
         return true;
     }
+    bool EmitTextLabelIntrinsic(uint32_t intrinsic, std::vector<BinaryNinja::ExprId> params, size_t& len, size_t insnLen)
+    {
+        m_il.AddInstruction(m_il.Intrinsic({}, intrinsic, params));
+        len = insnLen;
+        return true;
+    }
+    bool TextLabelAssignString(uint8_t size, size_t& len)
+    {
+        Value dst, src;
+        if (!Pop(dst) || !Pop(src)) return false;
+        return EmitTextLabelIntrinsic(Intrin_TextLabelAssignString, {dst.expr, src.expr, m_il.Const(4, size)}, len, 2);
+    }
+    bool TextLabelAssignInt(uint8_t size, size_t& len)
+    {
+        Value dst, value;
+        if (!Pop(dst) || !Pop(value)) return false;
+        return EmitTextLabelIntrinsic(Intrin_TextLabelAssignInt, {dst.expr, value.expr, m_il.Const(4, size)}, len, 2);
+    }
+    bool TextLabelAppendString(uint8_t size, size_t& len)
+    {
+        Value dst, src;
+        if (!Pop(dst) || !Pop(src)) return false;
+        return EmitTextLabelIntrinsic(Intrin_TextLabelAppendString, {dst.expr, src.expr, m_il.Const(4, size)}, len, 2);
+    }
+    bool TextLabelAppendInt(uint8_t size, size_t& len)
+    {
+        Value dst, value;
+        if (!Pop(dst) || !Pop(value)) return false;
+        return EmitTextLabelIntrinsic(Intrin_TextLabelAppendInt, {dst.expr, value.expr, m_il.Const(4, size)}, len, 2);
+    }
+    bool TextLabelCopy(size_t& len)
+    {
+        Value dst, repeat, src;
+        if (!Pop(dst) || !Pop(repeat) || !Pop(src)) return false;
+        return EmitTextLabelIntrinsic(Intrin_TextLabelCopy, {dst.expr, repeat.expr, src.expr}, len, 1);
+    }
     bool String(size_t& len)
     {
         Value off; if (!Pop(off)) return false;
@@ -2646,6 +2686,37 @@ class YSCSymbolicLifter
 };
 }
 
+bool EmitYSCTextLabelFallbackLLIL(uint8_t opcode, const uint8_t* data, size_t& len,
+                                  BinaryNinja::LowLevelILFunction& il)
+{
+    auto emit = [&](uint32_t intrinsic, std::vector<BinaryNinja::ExprId> params, size_t instrLen) {
+        il.AddInstruction(il.Intrinsic({}, intrinsic, params));
+        len = instrLen;
+        return true;
+    };
+
+    switch (opcode)
+    {
+    case OP_TEXT_LABEL_ASSIGN_STRING:
+        if (!data || len < 2) return false;
+        return emit(Intrin_TextLabelAssignString, {il.Pop(4), il.Pop(4), il.Const(4, data[0])}, 2);
+    case OP_TEXT_LABEL_ASSIGN_INT:
+        if (!data || len < 2) return false;
+        return emit(Intrin_TextLabelAssignInt, {il.Pop(4), il.Pop(4), il.Const(4, data[0])}, 2);
+    case OP_TEXT_LABEL_APPEND_STRING:
+        if (!data || len < 2) return false;
+        return emit(Intrin_TextLabelAppendString, {il.Pop(4), il.Pop(4), il.Const(4, data[0])}, 2);
+    case OP_TEXT_LABEL_APPEND_INT:
+        if (!data || len < 2) return false;
+        return emit(Intrin_TextLabelAppendInt, {il.Pop(4), il.Pop(4), il.Const(4, data[0])}, 2);
+    case OP_TEXT_LABEL_COPY:
+        if (len < 1) return false;
+        return emit(Intrin_TextLabelCopy, {il.Pop(4), il.Pop(4), il.Pop(4)}, 1);
+    default:
+        return false;
+    }
+}
+
 uintptr_t MarkYSCArchitectureViewActive(BinaryNinja::BinaryView* view)
 {
     uintptr_t key = GetYSCViewCacheKey(view);
@@ -2725,6 +2796,23 @@ bool YSCArchitecture::GetInstructionLowLevelIL(const uint8_t* data, uint64_t add
     if (instrLen == 0 || len < instrLen)
         return false;
 
+    switch (insn)
+    {
+    case OP_TEXT_LABEL_ASSIGN_STRING:
+    case OP_TEXT_LABEL_ASSIGN_INT:
+    case OP_TEXT_LABEL_APPEND_STRING:
+    case OP_TEXT_LABEL_APPEND_INT:
+    case OP_TEXT_LABEL_COPY:
+    {
+        size_t opLen = instrLen;
+        bool success = m_insns[insn]->GetInstructionLowLevelIL(data + 1, addr, opLen, il);
+        len = instrLen;
+        return success;
+    }
+    default:
+        break;
+    }
+
     AddBenignInstructionIL(il, insn);
     len = instrLen;
     return true;
@@ -2781,10 +2869,32 @@ std::vector<BinaryNinja::NameAndType> YSCArchitecture::GetIntrinsicInputs(uint32
 {
     using namespace BinaryNinja;
     std::vector<NameAndType> result;
+    auto charPtr = Type::PointerType(this, Type::IntegerType(1, true, "char"), false);
+    auto constCharPtr = Type::PointerType(this, Type::IntegerType(1, true, "char"), true);
+    auto constVoidPtr = Type::PointerType(this, Type::VoidType(), true);
+    auto int32 = Type::IntegerType(4, true);
+    auto uint32 = Type::IntegerType(4, false);
     switch (intrinsic)
     {
     case Intrin_StringHash:
         result.emplace_back("str", Type::PointerType(4, Type::IntegerType(1, false)));
+        break;
+    case Intrin_TextLabelAssignString:
+    case Intrin_TextLabelAppendString:
+        result.emplace_back("dst", charPtr);
+        result.emplace_back("src", constCharPtr);
+        result.emplace_back("size", uint32);
+        break;
+    case Intrin_TextLabelAssignInt:
+    case Intrin_TextLabelAppendInt:
+        result.emplace_back("dst", charPtr);
+        result.emplace_back("value", int32);
+        result.emplace_back("size", uint32);
+        break;
+    case Intrin_TextLabelCopy:
+        result.emplace_back("dst", charPtr);
+        result.emplace_back("repeat", uint32);
+        result.emplace_back("src", constVoidPtr);
         break;
     default:
         break;
@@ -2801,6 +2911,12 @@ YSCArchitecture::GetIntrinsicOutputs(uint32_t intrinsic)
     {
     case Intrin_StringHash:
         result.emplace_back(Type::IntegerType(4, false));
+        break;
+    case Intrin_TextLabelAssignString:
+    case Intrin_TextLabelAssignInt:
+    case Intrin_TextLabelAppendString:
+    case Intrin_TextLabelAppendInt:
+    case Intrin_TextLabelCopy:
         break;
     default:
         break;
