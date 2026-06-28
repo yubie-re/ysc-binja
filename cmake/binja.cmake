@@ -1,5 +1,5 @@
 include(FetchContent)
-set(BN_INSTALL_DIR "")
+set(BN_INSTALL_DIR "" CACHE PATH "Binary Ninja installation directory")
 set(HEADLESS ON)
 set(BN_INTERNAL_BUILD OFF)
 
@@ -14,4 +14,3 @@ FetchContent_Declare(
 message("BINJA")
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 FetchContent_MakeAvailable(binaryninjaapi)
-
