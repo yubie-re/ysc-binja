@@ -1,5 +1,4 @@
 cmake_minimum_required(VERSION 3.20)
-set(CMAKE_CXX_STANDARD 23)
 include(FetchContent)
 
 FetchContent_Declare(
@@ -21,34 +20,29 @@ if(NOT minitrace_POPULATED)
     add_subdirectory("${minitrace_SOURCE_DIR}" "${minitrace_BINARY_DIR}" EXCLUDE_FROM_ALL)
 endif()
 
-include_directories(
-./
-${PROJECT_SOURCE_DIR}
-)
-
 set(SRC_DIR "${PROJECT_SOURCE_DIR}/src")
 
-file(GLOB_RECURSE SRC_MAIN
-    "${SRC_DIR}/**.hpp"
-    "${SRC_DIR}/**.h"
-    "${SRC_DIR}/**.cpp"
-    "${SRC_DIR}/**.cc"
-    "${SRC_DIR}/**.cxx"
-    "${SRC_DIR}/**.asm"
+file(GLOB_RECURSE SRC_MAIN CONFIGURE_DEPENDS
+    "${SRC_DIR}/*.hpp"
+    "${SRC_DIR}/*.h"
+    "${SRC_DIR}/*.cpp"
+    "${SRC_DIR}/*.cc"
+    "${SRC_DIR}/*.cxx"
 )
-
-if(MSVC)
-    add_compile_options(/bigobj)
-endif()
 
 add_library(BinjaYSC SHARED ${SRC_MAIN})
 
-target_include_directories(BinjaYSC PRIVATE "${minitrace_SOURCE_DIR}")
+target_compile_features(BinjaYSC PRIVATE cxx_std_23)
+set_target_properties(BinjaYSC PROPERTIES CXX_EXTENSIONS OFF)
+target_include_directories(BinjaYSC PRIVATE
+    "${SRC_DIR}"
+    "${PROJECT_SOURCE_DIR}"
+    "${minitrace_SOURCE_DIR}"
+)
+if(MSVC)
+    target_compile_options(BinjaYSC PRIVATE /bigobj /MP)
+endif()
 target_precompile_headers(BinjaYSC PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${SRC_DIR}/inc.hpp>")
 target_link_libraries(BinjaYSC binaryninjaapi fmt nlohmann_json::nlohmann_json minitrace::minitrace)
 
 bn_install_plugin(BinjaYSC)
-
-if(MSVC)
-    add_definitions(/MP)
-endif()

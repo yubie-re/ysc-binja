@@ -6,7 +6,9 @@
 #include <cstdlib>
 #include <fstream>
 #include <mutex>
+#if defined(__linux__)
 #include <unistd.h>
+#endif
 
 namespace
 {
@@ -17,6 +19,7 @@ std::chrono::steady_clock::time_point g_lastFlush;
 
 int64_t CurrentRssKb()
 {
+#if defined(__linux__)
     std::ifstream statm("/proc/self/statm");
     long pages = 0;
     long resident = 0;
@@ -26,6 +29,9 @@ int64_t CurrentRssKb()
     if (pageSize <= 0)
         return 0;
     return static_cast<int64_t>(resident) * pageSize / 1024;
+#else
+    return 0;
+#endif
 }
 
 void ShutdownTrace()
