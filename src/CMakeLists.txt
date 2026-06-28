@@ -1,5 +1,17 @@
 cmake_minimum_required(VERSION 3.20)
 set(CMAKE_CXX_STANDARD 23)
+include(FetchContent)
+
+FetchContent_Declare(
+    minitrace
+    GIT_REPOSITORY https://github.com/hrydgard/minitrace.git
+    GIT_TAG 242da50d4bc757ca79ca4925690683612f0e7457
+)
+set(FETCHCONTENT_UPDATES_DISCONNECTED_MINITRACE ON)
+set(MTR_BUILD_TEST OFF CACHE BOOL "" FORCE)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+FetchContent_MakeAvailable(minitrace)
+
 include_directories(
 ./
 ${PROJECT_SOURCE_DIR}
@@ -11,7 +23,6 @@ file(GLOB_RECURSE SRC_MAIN
     "${SRC_DIR}/**.hpp"
     "${SRC_DIR}/**.h"
     "${SRC_DIR}/**.cpp"
-    "${PROJECT_SOURCE_DIR}/third_party/**.c"
     "${SRC_DIR}/**.cc"
     "${SRC_DIR}/**.cxx"
     "${SRC_DIR}/**.asm"
@@ -23,9 +34,9 @@ endif()
 
 add_library(BinjaYSC SHARED ${SRC_MAIN})
 
-target_compile_definitions(BinjaYSC PRIVATE MTR_ENABLED)
+target_include_directories(BinjaYSC PRIVATE "${minitrace_SOURCE_DIR}")
 target_precompile_headers(BinjaYSC PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${SRC_DIR}/inc.hpp>")
-target_link_libraries(BinjaYSC binaryninjaapi fmt nlohmann_json::nlohmann_json)
+target_link_libraries(BinjaYSC binaryninjaapi fmt nlohmann_json::nlohmann_json minitrace::minitrace)
 
 bn_install_plugin(BinjaYSC)
 

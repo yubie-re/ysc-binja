@@ -1,6 +1,6 @@
 #include "YSCTrace.hpp"
 
-#include "third_party/minitrace/minitrace.h"
+#include "minitrace.h"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
