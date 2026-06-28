@@ -99,6 +99,22 @@ static BinaryNinja::Ref<BinaryNinja::Type> NativeJsonTypeToBN(BinaryNinja::Archi
     return Type::IntegerType(4, true);
 }
 
+static json::const_iterator FindNativeMetadata(const json& nativeNamespace, uint64_t hash)
+{
+    auto find = nativeNamespace.find(fmt::format("0x{:016X}", hash));
+    if (find != nativeNamespace.end())
+        return find;
+
+    return nativeNamespace.find(fmt::format("0x{:X}", hash));
+}
+
+static std::string NativeSymbolName(const std::string& namespaceName, const std::string& nativeName)
+{
+    std::string combined = fmt::format("{}_{}", namespaceName, nativeName);
+
+    return fmt::format("native_{}", combined);
+}
+
 YSCView::~YSCView()
 {
     YSC_TRACE_SCOPE("ysc.view", "YSCView::~YSCView");
@@ -197,7 +213,7 @@ bool YSCView::Init()
         uint32_t parentNativeTablePtr = *header.m_nativesTable;
         {
             YSC_TRACE_SCOPE_I("ysc.view", "Define native symbols", "count", header.m_nativesCount);
-            for(int i = 0; i < header.m_nativesCount; i++)
+            for(uint32_t i = 0; i < header.m_nativesCount; i++)
             {
                 uint64_t native = 0 ;
                 uint32_t nativeAddressParent = parentNativeTablePtr + i * sizeof(uint64_t);
@@ -217,11 +233,10 @@ bool YSCView::Init()
                     continue;
                 }
                 uint64_t nativeDay1 = g_reverseCrossmap.at(native);
-                auto jsonHash = fmt::format("0x{:X}", nativeDay1);
                 bool found = false;
                 for (auto& namespce : j.items())
                 {
-                    auto find = namespce.value().find(jsonHash);
+                    auto find = FindNativeMetadata(namespce.value(), nativeDay1);
                     if(find != namespce.value().end())
                     {
                         found = true;
@@ -235,7 +250,9 @@ bool YSCView::Init()
                             params.push_back(FunctionParameter(x.value("name", "param"), NativeJsonTypeToBN(GetDefaultArchitecture(), x.value("type", "int"))));
                         }
                         DefineDataVariable(nativeAddressVirtual, Type::FunctionType(returnValue, callConvention, params, false, 0));
-                        DefineAutoSymbol(new Symbol(BNSymbolType::ExternalSymbol, fmt::format("native_{}_{}", namespce.key(), nativeStruct["name"].get<std::string>()), nativeAddressVirtual));
+                        DefineAutoSymbol(new Symbol(BNSymbolType::ExternalSymbol,
+                            NativeSymbolName(namespce.key(), nativeStruct.value("name", "UNKNOWN_NATIVE")),
+                            nativeAddressVirtual));
                         break;
                     }
                 }
